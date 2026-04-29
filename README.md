@@ -12,10 +12,15 @@ services and languages.
 
 ```
 pricing/costs.json   single source of truth for per-service pricing
-js/                  @wisent/cost-tracker — TypeScript client (Node 20+)
+src/                 @wisent/cost-tracker — TypeScript client (Node 20+)
 py/                  wisent_cost_tracker  — Python 3.11+ client
 supabase/            reference migrations (apply via wisent-supabase-* repos)
 ```
+
+The Python package needs a copy of `pricing/costs.json` inside its package
+tree (`py/src/wisent_cost_tracker/pricing/costs.json`) so `pip install
+git+...#subdirectory=py` bundles it. Run `npm run sync-pricing` after every
+edit to `pricing/costs.json` (or rely on the pre-commit hook below).
 
 ## Wiring
 

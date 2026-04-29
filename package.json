@@ -12,17 +12,18 @@
     },
     "./pricing.json": "./dist/pricing/costs.json"
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "pricing", "README.md"],
   "scripts": {
-    "build": "tsc && mkdir -p dist/pricing && cp ../pricing/costs.json dist/pricing/costs.json",
-    "test": "node --test dist/test/*.test.js"
+    "build": "tsc && mkdir -p dist/pricing && cp pricing/costs.json dist/pricing/costs.json",
+    "prepare": "npm run build",
+    "test": "node --test dist/test/*.test.js",
+    "sync-pricing": "cp pricing/costs.json py/src/wisent_cost_tracker/pricing/costs.json && echo synced"
   },
   "keywords": ["cost", "budget", "tracking", "wisent"],
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wisent-ai/wisent-cost-tracker.git",
-    "directory": "js"
+    "url": "https://github.com/wisent-ai/wisent-cost-tracker.git"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
