@@ -1,0 +1,31 @@
+{
+  "name": "@wisent/cost-tracker",
+  "version": "0.1.0",
+  "description": "Per-agent cost tracking and budget enforcement (TS client).",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./pricing.json": "./dist/pricing/costs.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc && mkdir -p dist/pricing && cp ../pricing/costs.json dist/pricing/costs.json",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "keywords": ["cost", "budget", "tracking", "wisent"],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wisent-ai/wisent-cost-tracker.git",
+    "directory": "js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
