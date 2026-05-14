@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-29",
+  "currency": "USD",
+  "captcha": {
+    "capsolver": {
+      "recaptcha_v2": 0.0008,
+      "recaptcha_v3": 0.001,
+      "hcaptcha": 0.0008,
+      "funcaptcha": 0.0015,
+      "turnstile": 0.0012,
+      "default": 0.001
+    },
+    "anticaptcha": {
+      "recaptcha_v2": 0.001,
+      "recaptcha_v3": 0.001,
+      "hcaptcha": 0.001,
+      "funcaptcha": 0.002,
+      "default": 0.001
+    },
+    "capmonster": {
+      "recaptcha_v2": 0.0006,
+      "recaptcha_v3": 0.0006,
+      "hcaptcha": 0.0006,
+      "funcaptcha": 0.0012,
+      "default": 0.0006
+    },
+    "twocaptcha": {
+      "recaptcha_v2": 0.001,
+      "recaptcha_v3": 0.001,
+      "hcaptcha": 0.001,
+      "funcaptcha": 0.0028,
+      "default": 0.001
+    },
+    "nocaptcha": {
+      "perimeterx": 0.005,
+      "default": 0.005
+    }
+  },
+  "sms": {
+    "juicysms": {
+      "reddit": 0.20,
+      "twitter": 0.30,
+      "instagram": 0.50,
+      "discord": 0.15,
+      "tiktok": 0.30,
+      "google": 0.30,
+      "telegram": 0.15,
+      "whatsapp": 0.50,
+      "facebook": 0.30,
+      "yahoo": 0.15,
+      "linkedin": 0.30,
+      "default": 0.30
+    },
+    "smsactivate": {
+      "reddit": 0.15,
+      "twitter": 0.20,
+      "instagram": 0.30,
+      "discord": 0.10,
+      "tiktok": 0.20,
+      "google": 0.20,
+      "default": 0.20
+    },
+    "fivesim": {
+      "default": 0.25
+    }
+  },
+  "proxy_per_gb": {
+    "brightdata": 8.40,
+    "oxylabs": 7.50,
+    "oxylabs_mobile": 9.00,
+    "packetstream": 1.00,
+    "pingproxies": 1.50,
+    "iproyal": 7.00,
+    "default": 5.00
+  },
+  "llm": {
+    "gemini-2.0-flash": {"input_per_1k": 0.00015, "output_per_1k": 0.0006},
+    "gemini-1.5-flash": {"input_per_1k": 0.000075, "output_per_1k": 0.0003},
+    "gemini-1.5-pro": {"input_per_1k": 0.00125, "output_per_1k": 0.005},
+    "claude-3-5-sonnet": {"input_per_1k": 0.003, "output_per_1k": 0.015},
+    "claude-3-opus": {"input_per_1k": 0.015, "output_per_1k": 0.075},
+    "claude-3-haiku": {"input_per_1k": 0.0008, "output_per_1k": 0.004},
+    "gpt-4o": {"input_per_1k": 0.005, "output_per_1k": 0.015},
+    "gpt-4o-mini": {"input_per_1k": 0.00015, "output_per_1k": 0.0006},
+    "default": {"input_per_1k": 0.001, "output_per_1k": 0.003}
+  },
+  "compute_per_hour": {
+    "gcp_e2-medium": 0.025,
+    "gcp_n2-standard-2": 0.097,
+    "gcp_n2-standard-4": 0.194,
+    "gcp_n2-standard-8": 0.388,
+    "aws_t3.medium": 0.0416,
+    "aws_t3.large": 0.0832,
+    "runpod_a40": 0.39,
+    "runpod_a100_80gb": 1.99,
+    "runpod_h100_80gb": 2.69,
+    "default": 0.05
+  },
+  "email": {
+    "resend": 0.0004,
+    "default": 0.001
+  }
+}
