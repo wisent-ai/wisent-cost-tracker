@@ -67,14 +67,37 @@ jobs:
         run: |
           set -euo pipefail
           : "${RUNNER_TEMP:=$(mktemp -d)}"
+          : "${GITHUB_PATH:=$(mktemp)}"
           python3 -m venv "$RUNNER_TEMP/rule"
           "$RUNNER_TEMP/rule/bin/python" -m pip install --quiet \
             "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
-          # Demand that the rule ANSWERS before anything downstream announces a
-          # verdict, and demand two different answers so a saboteur that returns
-          # one constant cannot satisfy it. The absolute path is used because
-          # GITHUB_PATH only affects LATER steps, not this one.
-          rule="$RUNNER_TEMP/rule/bin/autoversion"
+          echo "$RUNNER_TEMP/rule/bin" >> "$GITHUB_PATH"
+          # The runner reads GITHUB_PATH only AFTER this step exits, so that line
+          # changes PATH for LATER steps and never for this one. Without the export
+          # below, the assertions that follow would go one of two ways and the
+          # passing one is the dangerous one: with nothing else on PATH the step
+          # dies "command not found", which is the permanent red this venv exists
+          # to remove; with a stranger's `autoversion` earlier on PATH the step
+          # exits zero because THE STRANGER ANSWERED, vouching for a rule nobody
+          # asked. The export gives this step the same prepend semantics
+          # GITHUB_PATH gives the next ones.
+          export PATH="$RUNNER_TEMP/rule/bin:$PATH"
+
+          # Establish WHICH autoversion is about to answer before believing it.
+          resolved="$(command -v autoversion || true)"
+          case "$resolved" in
+            "$RUNNER_TEMP/rule/bin/"*) ;;
+            *)
+              echo "::error::autoversion resolves to '${resolved:-nothing}', outside the venv" \
+                "this step just built, so the prepend did not take and any answer below would" \
+                "come from a stranger"
+              false
+              ;;
+          esac
+
+          # Then demand that it ANSWERS, and demand two DIFFERENT known answers, so
+          # a saboteur returning one constant cannot satisfy this. `--help` would
+          # have been satisfied by any executable that exits zero.
           base=released-surface.npm.json
           released="$(jq -r '.version' "$base")"
           victim="$(jq -r '.surface | first' "$base")"
@@ -82,7 +105,7 @@ jobs:
             "$base" > "$RUNNER_TEMP/rule-probe.json"
           for arm in "$base:internal" "$RUNNER_TEMP/rule-probe.json:breaking"; do
             want="${arm##*:}"
-            "$rule" decide --current "$released" --published-surface "$base" \
+            autoversion decide --current "$released" --published-surface "$base" \
               --candidate-surface "${arm%:*}" --json > "$RUNNER_TEMP/rule-answer.json"
             got="$(jq -r '.change' "$RUNNER_TEMP/rule-answer.json")"
             [ "$got" = "$want" ] || {
@@ -92,7 +115,7 @@ jobs:
               false
             }
           done
-          echo "$RUNNER_TEMP/rule/bin" >> "${GITHUB_PATH:-/dev/stdout}"
+          echo "the rule answers from $resolved"
 
       # GITHUB_PATH is what makes every later `autoversion` resolve to the venv,
       # and it is also what beats anything a saboteur left earlier on PATH. If it
