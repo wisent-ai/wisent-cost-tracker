@@ -95,27 +95,43 @@ jobs:
               ;;
           esac
 
-          # Then demand that it ANSWERS, and demand two DIFFERENT known answers, so
-          # a saboteur returning one constant cannot satisfy this. `--help` would
-          # have been satisfied by any executable that exits zero.
-          base=released-surface.npm.json
-          released="$(jq -r '.version' "$base")"
-          victim="$(jq -r '.surface | first' "$base")"
-          jq --arg victim "$victim" '.surface |= map(select(. != $victim))' \
-            "$base" > "$RUNNER_TEMP/rule-probe.json"
-          for arm in "$base:internal" "$RUNNER_TEMP/rule-probe.json:breaking"; do
-            want="${arm##*:}"
-            autoversion decide --current "$released" --published-surface "$base" \
-              --candidate-surface "${arm%:*}" --json > "$RUNNER_TEMP/rule-answer.json"
-            got="$(jq -r '.change' "$RUNNER_TEMP/rule-answer.json")"
-            [ "$got" = "$want" ] || {
-              echo "::error::the freshly installed rule answered '$got' where '$want' is" \
-                "certain, so it is not the rule this gate needs; no verdict below would" \
-                "mean anything"
+          # Then demand that it ANSWERS, and demand two DIFFERENT known answers for
+          # each baseline, so a saboteur returning one constant cannot satisfy this.
+          # `--help` would have been satisfied by any executable that exits zero, and
+          # a single `internal` probe by any saboteur that always says `internal`.
+          #
+          # The pair is fixtured from the COMMITTED baselines rather than synthetic
+          # surfaces, so this one step also establishes that both frozen files parse,
+          # carry a version and a non-empty surface, and are priced correctly by the
+          # very rule that will read them below. Both are checked because this
+          # repository freezes two of them, and proving one says nothing about the
+          # other.
+          for base in released-surface.npm.json released-surface.pypi.json; do
+            released="$(jq -r '.version' "$base")"
+            # `sort | first` rather than a subscript: this workspace refuses bare
+            # numeric literals, and sorting makes the choice deterministic.
+            victim="$(jq -r '.surface | sort | first' "$base")"
+            [ -n "$released" ] && [ -n "$victim" ] || {
+              echo "::error::$base carries no version or an empty surface, so it cannot" \
+                "fixture this check and no baseline below would be trustworthy"
               false
             }
+            jq --arg victim "$victim" '.surface |= map(select(. != $victim))' \
+              "$base" > "$RUNNER_TEMP/rule-probe.json"
+            for arm in "$base:internal" "$RUNNER_TEMP/rule-probe.json:breaking"; do
+              want="${arm##*:}"
+              autoversion decide --current "$released" --published-surface "$base" \
+                --candidate-surface "${arm%:*}" --json > "$RUNNER_TEMP/rule-answer.json"
+              got="$(jq -r '.change' "$RUNNER_TEMP/rule-answer.json")"
+              [ "$got" = "$want" ] || {
+                echo "::error::on $base the freshly installed rule answered '$got' where" \
+                  "'$want' is certain, so it is not the rule this gate needs; no verdict" \
+                  "below would mean anything"
+                false
+              }
+            done
           done
-          echo "the rule answers from $resolved"
+          echo "the rule answers from $resolved, and both committed baselines price correctly"
 
       # GITHUB_PATH is what makes every later `autoversion` resolve to the venv,
       # and it is also what beats anything a saboteur left earlier on PATH. If it
