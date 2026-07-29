@@ -48,11 +48,75 @@ jobs:
       - name: Make tags and history visible
         run: git fetch --force --tags --unshallow || git fetch --force --tags
 
-      # The runner's own python3 is used deliberately: `actions/setup-python`
-      # would pin an interpreter version, and nothing here needs one. Every
-      # script below is standard library only (ast, tomllib, urllib, tarfile).
+      # The rule goes into a venv, NOT into the runner's system Python.
+      #
+      # `ubuntu-latest` now resolves to an Ubuntu whose `python3` carries the
+      # externally-managed marker, so a plain `pip install` dies with
+      # `error: externally-managed-environment` BEFORE any check runs. That makes
+      # the gate permanently red, which by our own criterion is worth exactly as
+      # much as a sleeping one and additionally trains people to ignore red. A
+      # venv sidesteps the marker without `--break-system-packages`, and pushing
+      # its `bin` onto `GITHUB_PATH` leaves every later `autoversion` call
+      # unchanged. `RUNNER_TEMP` and `GITHUB_PATH` are set by the runner, so both
+      # have a local fallback: this step must be runnable by hand.
+      #
+      # `actions/setup-python` is still deliberately absent: it would pin an
+      # interpreter version, and every script here is standard library only
+      # (ast, tomllib, urllib, tarfile).
       - name: Install the rule
-        run: pip install --quiet "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+        run: |
+          set -euo pipefail
+          : "${RUNNER_TEMP:=$(mktemp -d)}"
+          python3 -m venv "$RUNNER_TEMP/rule"
+          "$RUNNER_TEMP/rule/bin/python" -m pip install --quiet \
+            "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+          # Demand that the rule ANSWERS before anything downstream announces a
+          # verdict, and demand two different answers so a saboteur that returns
+          # one constant cannot satisfy it. The absolute path is used because
+          # GITHUB_PATH only affects LATER steps, not this one.
+          rule="$RUNNER_TEMP/rule/bin/autoversion"
+          base=released-surface.npm.json
+          released="$(jq -r '.version' "$base")"
+          victim="$(jq -r '.surface | first' "$base")"
+          jq --arg victim "$victim" '.surface |= map(select(. != $victim))' \
+            "$base" > "$RUNNER_TEMP/rule-probe.json"
+          for arm in "$base:internal" "$RUNNER_TEMP/rule-probe.json:breaking"; do
+            want="${arm##*:}"
+            "$rule" decide --current "$released" --published-surface "$base" \
+              --candidate-surface "${arm%:*}" --json > "$RUNNER_TEMP/rule-answer.json"
+            got="$(jq -r '.change' "$RUNNER_TEMP/rule-answer.json")"
+            [ "$got" = "$want" ] || {
+              echo "::error::the freshly installed rule answered '$got' where '$want' is" \
+                "certain, so it is not the rule this gate needs; no verdict below would" \
+                "mean anything"
+              false
+            }
+          done
+          echo "$RUNNER_TEMP/rule/bin" >> "${GITHUB_PATH:-/dev/stdout}"
+
+      # GITHUB_PATH is what makes every later `autoversion` resolve to the venv,
+      # and it is also what beats anything a saboteur left earlier on PATH. If it
+      # silently failed to apply, the steps below would consult whatever else is
+      # named `autoversion` — so establish here that the name resolves INSIDE the
+      # venv, and refuse if it does not.
+      - name: The rule answers on PATH
+        run: |
+          set -euo pipefail
+          : "${RUNNER_TEMP:=$(mktemp -d)}"
+          resolved="$(command -v autoversion || true)"
+          [ -n "$resolved" ] || {
+            echo "::error::autoversion is not on PATH, so the install step did not take effect"
+            false
+          }
+          case "$resolved" in
+            "$RUNNER_TEMP/rule/bin/"*) ;;
+            *)
+              echo "::error::autoversion resolves to $resolved, which is outside the venv this" \
+                "job installed; a stranger's binary would be deciding our releases"
+              false
+              ;;
+          esac
+          echo "the rule resolves to $resolved"
 
       # ------------------------------------------------------------------ #
       # npm — @wisent/cost-tracker
