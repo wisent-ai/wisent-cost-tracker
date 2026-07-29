@@ -188,7 +188,12 @@ def registry_state(dist: str, name: str) -> dict:
             latest = tags.get("latest", "")
             versions = data.get("versions") or {}
             tarball = ((versions.get(latest) or {}).get("dist") or {}).get("tarball", "")
-            path = tarball[len(NPM_REGISTRY) :] if tarball.startswith(NPM_REGISTRY) else tarball
+            # The marker carries the registry PATH, e.g. `@types/express/-/express-5.0.6.tgz`.
+            # Read it off the URL rather than by stripping a hard-coded host: if npm
+            # ever answered from a mirror or a CDN, a prefix strip would silently put
+            # a whole URL in the marker, quietly changing what a marker MEANS while
+            # every comparison still looked self-consistent.
+            path = urllib.parse.urlparse(tarball).path.removeprefix("/")
             if not latest or not path:
                 return {
                     "state": UNPROVEN,
