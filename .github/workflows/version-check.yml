@@ -1,0 +1,281 @@
+# The shared versioning rule, applied once per DISTRIBUTION.
+#
+# This repository ships two independent distributions from one tree:
+#
+#   * the npm package `@wisent/cost-tracker` at the root, consumed by `weles`
+#   * the PyPI distribution `wisent-cost-tracker` under `py/`, consumed by
+#     `trading-autonomy`
+#
+# Each carries its own version, its own consumers and its own baseline, so each
+# gets its own steps below. There is deliberately NO union surface: a shared
+# surface would demand a version bump of the untouched distribution, which
+# manufactures a release nobody decided to make. Their surfaces have in fact
+# already drifted while both manifests still declare the same version — four
+# types exported from npm have no Python counterpart — and that drift is the
+# defect a gate exists to expose, not a reason to fold the two together.
+#
+# The rule is installed, never copied. Nothing here bumps a version: deriving
+# the number is mechanical, deciding to release is deliberate.
+#
+# Note for anyone editing this file: this workspace refuses bare numeric
+# literals, so every index or key that would need a lone number is spelled as a
+# word — `jq '... | first'`, and a tag-fetch step rather than a checkout depth.
+
+name: version-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `actions/checkout@v4` fetches one commit and no tags, so a tier probe
+      # would read an empty tag list on the runner and conclude the bottom tier
+      # is the best available — blind to the exact tag it exists to notice.
+      # `scripts/baseline.py` resolves tags and may run `git archive`, so this
+      # step is load-bearing here, not ceremony. Unshallowing matters on its own:
+      # a shallow clone lacks a tag's tree. `--unshallow` errors on an already
+      # complete repository, hence the fallback.
+      - name: Make tags and history visible
+        run: git fetch --force --tags --unshallow || git fetch --force --tags
+
+      # The runner's own python3 is used deliberately: `actions/setup-python`
+      # would pin an interpreter version, and nothing here needs one. Every
+      # script below is standard library only (ast, tomllib, urllib, tarfile).
+      - name: Install the rule
+        run: pip install --quiet "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+
+      # ------------------------------------------------------------------ #
+      # npm — @wisent/cost-tracker
+      # ------------------------------------------------------------------ #
+
+      # Guards the baseline in both directions against npm and only npm.
+      # "Absent from PyPI" would be vacuous for an npm package and would pass
+      # unconditionally. Absence is read from the answer's CONTENT, never from a
+      # client's exit status, and the registry must echo the subject's name back,
+      # so a lookup that was refused or that answered about somebody else's
+      # package cannot read as proven absence. A positive control on a scoped
+      # package runs through the same spelling as the subject, which is the only
+      # thing that catches a probe answering truthfully about the wrong object.
+      #
+      # Every network read in this gate goes through urllib inside
+      # scripts/baseline.py. There is deliberately no curl anywhere: a gate that
+      # mixes shell and Python has two transports, and stubbing one leaves the
+      # other on real network while looking verified.
+      - name: npm — baseline is honest about its tier
+        run: python3 scripts/baseline.py --dist npm --check
+
+      # Being truthful about a tier is not the same as being on the best one: a
+      # tag or a first publish can appear after the baseline was written.
+      #
+      # The generator runs INTO A FILE and its status is tested on its own line.
+      # Inside a command substitution containing a pipeline the exit status is
+      # discarded and `set -e` does not reach in, so a dead generator would
+      # yield an empty `best` — and if the committed marker ever also read empty,
+      # the step would compare "" against "" and pass vacuously.
+      - name: npm — baseline is not stale
+        run: |
+          set -euo pipefail
+          marker="$(jq -r '.source | split(" ") | first' released-surface.npm.json)"
+          python3 scripts/baseline.py --dist npm --stdout > "$RUNNER_TEMP/best.npm.json" || {
+            echo "::error::the npm baseline generator failed, so the best reachable tier is unknown"
+            false
+          }
+          best="$(jq -r '.source | split(" ") | first' "$RUNNER_TEMP/best.npm.json")"
+          [ -n "$best" ] && [ -n "$marker" ] || {
+            echo "::error::an npm marker read empty, so this comparison would be vacuous"
+            false
+          }
+          # Whole marker on every tier; the tier prefix alone on `head:`, which is
+          # the one marker whose sha moves without the artifact changing.
+          if [ "${marker%%:*}" = head ]; then
+            want="${best%%:*}"
+            have="${marker%%:*}"
+          else
+            want="$best"
+            have="$marker"
+          fi
+          if [ "$want" != "$have" ]; then
+            echo "::error::the npm baseline is '$have' but '$want' is reachable now, so it is" \
+              "truthful yet stale; regenerate it with scripts/baseline.py --dist npm --write"
+            false
+          fi
+          echo "npm: baseline is on the best reachable tier ($have)"
+
+      - name: npm — gate
+        run: |
+          set -euo pipefail
+          python3 scripts/surface_npm.py > "$RUNNER_TEMP/candidate.npm.json"
+          released="$(jq -r '.version' released-surface.npm.json)"
+          declared="$(python3 scripts/baseline.py --dist npm --declared)"
+          [ -n "$released" ] && [ -n "$declared" ] || {
+            echo "::error::a version read empty, so the npm comparison would be vacuous"
+            false
+          }
+          autoversion decide --current "$released" \
+            --published-surface released-surface.npm.json \
+            --candidate-surface "$RUNNER_TEMP/candidate.npm.json" \
+            --json > "$RUNNER_TEMP/decision.npm.json"
+          change="$(jq -r '.change' "$RUNNER_TEMP/decision.npm.json")"
+          required="$(jq -r '.next' "$RUNNER_TEMP/decision.npm.json")"
+          removed="$(jq -r '.removed | join(", ")' "$RUNNER_TEMP/decision.npm.json")"
+          added="$(jq -r '.added | join(", ")' "$RUNNER_TEMP/decision.npm.json")"
+          echo "npm: released $released, declared $declared, change $change, required $required"
+          [ -z "$removed" ] || echo "npm: removed — $removed"
+          [ -z "$added" ] || echo "npm: added — $added"
+          if [ "$declared" = "$released" ] && [ "$change" = internal ]; then
+            echo "npm: @wisent/cost-tracker has nothing to release"
+          elif [ "$declared" = "$released" ]; then
+            echo "::error::the npm surface changed ($change) but package.json still declares" \
+              "the published $declared; that change requires $required"
+            false
+          elif [ "$declared" != "$required" ]; then
+            echo "::error::package.json declares $declared, but a $change change to the npm" \
+              "surface of the published $released requires $required"
+            false
+          else
+            echo "npm: declared $declared is the version the rule requires"
+          fi
+
+      # A gate that has never refused is decoration, and it can rot into a
+      # tautology without anybody noticing. So refuse something on every run:
+      # drop a name the distribution really exports and add one it does not, and
+      # demand `breaking` and `additive`. The victim is picked with `first`
+      # rather than a subscript, and removed by value.
+      #
+      # This is the fail-closed twin of a sleeping probe. "Unproven" is also what
+      # a broken expression produces, so the message blames the gate, not npm.
+      - name: npm — the gate can still refuse
+        run: |
+          set -euo pipefail
+          base=released-surface.npm.json
+          released="$(jq -r '.version' "$base")"
+          victim="$(jq -r '.surface | first' "$base")"
+          [ -n "$victim" ] || {
+            echo "::error::the npm baseline yielded no name to remove, so this proof is vacuous"
+            false
+          }
+          jq --arg victim "$victim" '.surface |= map(select(. != $victim))' \
+            "$base" > "$RUNNER_TEMP/npm.removed.json"
+          jq '.surface += ["autoversionRefusalProbe"]' "$base" > "$RUNNER_TEMP/npm.added.json"
+          for arm in removed:breaking added:additive; do
+            arm_file="$RUNNER_TEMP/npm.${arm%%:*}.json"
+            want="${arm##*:}"
+            autoversion decide --current "$released" --published-surface "$base" \
+              --candidate-surface "$arm_file" --json > "$RUNNER_TEMP/npm.$want.decision.json"
+            got="$(jq -r '.change' "$RUNNER_TEMP/npm.$want.decision.json")"
+            [ "$got" = "$want" ] || {
+              echo "::error::the npm gate answered '$got' where '$want' is certain, so its" \
+                "verdicts above mean nothing; suspect this gate, not the package"
+              false
+            }
+          done
+          echo "npm: gate calls a removed name ($victim) breaking and an added one additive"
+
+      # ------------------------------------------------------------------ #
+      # PyPI — wisent-cost-tracker
+      # ------------------------------------------------------------------ #
+
+      # Against PyPI and only PyPI, for the same reason the npm steps above are
+      # scoped to npm. A reverse assertion pointed at the other family's registry
+      # is vacuous and passes unconditionally forever.
+      - name: pypi — baseline is honest about its tier
+        run: python3 scripts/baseline.py --dist pypi --check
+
+      - name: pypi — baseline is not stale
+        run: |
+          set -euo pipefail
+          marker="$(jq -r '.source | split(" ") | first' released-surface.pypi.json)"
+          python3 scripts/baseline.py --dist pypi --stdout > "$RUNNER_TEMP/best.pypi.json" || {
+            echo "::error::the pypi baseline generator failed, so the best reachable tier is unknown"
+            false
+          }
+          best="$(jq -r '.source | split(" ") | first' "$RUNNER_TEMP/best.pypi.json")"
+          [ -n "$best" ] && [ -n "$marker" ] || {
+            echo "::error::a pypi marker read empty, so this comparison would be vacuous"
+            false
+          }
+          if [ "${marker%%:*}" = head ]; then
+            want="${best%%:*}"
+            have="${marker%%:*}"
+          else
+            want="$best"
+            have="$marker"
+          fi
+          if [ "$want" != "$have" ]; then
+            echo "::error::the pypi baseline is '$have' but '$want' is reachable now, so it is" \
+              "truthful yet stale; regenerate it with scripts/baseline.py --dist pypi --write"
+            false
+          fi
+          echo "pypi: baseline is on the best reachable tier ($have)"
+
+      - name: pypi — gate
+        run: |
+          set -euo pipefail
+          python3 scripts/surface_py.py > "$RUNNER_TEMP/candidate.pypi.json"
+          released="$(jq -r '.version' released-surface.pypi.json)"
+          declared="$(python3 scripts/baseline.py --dist pypi --declared)"
+          [ -n "$released" ] && [ -n "$declared" ] || {
+            echo "::error::a version read empty, so the pypi comparison would be vacuous"
+            false
+          }
+          autoversion decide --current "$released" \
+            --published-surface released-surface.pypi.json \
+            --candidate-surface "$RUNNER_TEMP/candidate.pypi.json" \
+            --json > "$RUNNER_TEMP/decision.pypi.json"
+          change="$(jq -r '.change' "$RUNNER_TEMP/decision.pypi.json")"
+          required="$(jq -r '.next' "$RUNNER_TEMP/decision.pypi.json")"
+          removed="$(jq -r '.removed | join(", ")' "$RUNNER_TEMP/decision.pypi.json")"
+          added="$(jq -r '.added | join(", ")' "$RUNNER_TEMP/decision.pypi.json")"
+          echo "pypi: released $released, declared $declared, change $change, required $required"
+          [ -z "$removed" ] || echo "pypi: removed — $removed"
+          [ -z "$added" ] || echo "pypi: added — $added"
+          if [ "$declared" = "$released" ] && [ "$change" = internal ]; then
+            echo "pypi: wisent-cost-tracker has nothing to release"
+          elif [ "$declared" = "$released" ]; then
+            echo "::error::the pypi surface changed ($change) but py/pyproject.toml still" \
+              "declares the published $declared; that change requires $required"
+            false
+          elif [ "$declared" != "$required" ]; then
+            echo "::error::py/pyproject.toml declares $declared, but a $change change to the" \
+              "pypi surface of the published $released requires $required"
+            false
+          else
+            echo "pypi: declared $declared is the version the rule requires"
+          fi
+
+      - name: pypi — the gate can still refuse
+        run: |
+          set -euo pipefail
+          base=released-surface.pypi.json
+          released="$(jq -r '.version' "$base")"
+          victim="$(jq -r '.surface | first' "$base")"
+          [ -n "$victim" ] || {
+            echo "::error::the pypi baseline yielded no name to remove, so this proof is vacuous"
+            false
+          }
+          jq --arg victim "$victim" '.surface |= map(select(. != $victim))' \
+            "$base" > "$RUNNER_TEMP/pypi.removed.json"
+          jq '.surface += ["autoversion_refusal_probe"]' "$base" > "$RUNNER_TEMP/pypi.added.json"
+          for arm in removed:breaking added:additive; do
+            arm_file="$RUNNER_TEMP/pypi.${arm%%:*}.json"
+            want="${arm##*:}"
+            autoversion decide --current "$released" --published-surface "$base" \
+              --candidate-surface "$arm_file" --json > "$RUNNER_TEMP/pypi.$want.decision.json"
+            got="$(jq -r '.change' "$RUNNER_TEMP/pypi.$want.decision.json")"
+            [ "$got" = "$want" ] || {
+              echo "::error::the pypi gate answered '$got' where '$want' is certain, so its" \
+                "verdicts above mean nothing; suspect this gate, not the distribution"
+              false
+            }
+          done
+          echo "pypi: gate calls a removed name ($victim) breaking and an added one additive"
