@@ -60,6 +60,17 @@ balance. That precaution is not theoretical: the first draft of this analysis
 used a regex that scanned from a class header to end of file, so two classes
 silently absorbed a third's methods and reported a drift that did not exist. A
 scanner that guesses is worse than no scanner, because its answer looks precise.
+
+Brace balance alone is not enough, because the dangerous corruption is the one
+that stays balanced. A mangled or truncated class header simply stops matching,
+the class contributes no methods, and the surface comes out SHORTER — which the
+rule reads as removed capability, a false `breaking` verdict for damage nobody
+did. So every name the entry point re-exports is resolved back to a declaration
+in the module the entry point says it comes from, and an unresolvable name is a
+refusal. That turns a silent shrink into a loud stop.
+
+`export { X as Y }` puts Y in the surface, because Y is the name a caller holds,
+while X is what must resolve in the source module.
 """
 
 from __future__ import annotations
@@ -77,7 +88,16 @@ NONE = int(False)
 INDENT = STEP + STEP
 
 # `export { A, type B as C } from './x.js';` and `export type { D } from './y.js';`
-RE_EXPORT_BLOCK = re.compile(r"export\s+(?:type\s+)?\{(?P<body>[^}]*)\}\s*from", re.S)
+RE_EXPORT_BLOCK = re.compile(
+    r"export\s+(?:type\s+)?\{(?P<body>[^}]*)\}\s*from\s*['\"](?P<module>[^'\"]+)['\"]",
+    re.S,
+)
+# Every shape a `.d.ts` uses to declare a name a consumer can import.
+RE_DECLARATION = re.compile(
+    r"export\s+declare\s+(?:abstract\s+)?class\s+(?P<klass>[A-Za-z_$][\w$]*)"
+    r"|export\s+(?:declare\s+)?(?:interface|type|enum)\s+(?P<shape>[A-Za-z_$][\w$]*)"
+    r"|export\s+declare\s+(?:function|const|let|var)\s+(?P<value>[A-Za-z_$][\w$]*)"
+)
 RE_CLASS_HEAD = re.compile(
     r"export\s+declare\s+(?:abstract\s+)?class\s+(?P<name>[A-Za-z_$][\w$]*)"
 )
@@ -210,36 +230,84 @@ def public_method_names(body: str) -> list:
 
 
 def exported_names(index: Path) -> list:
+    """Return [(local, exported, module)] for every name the entry point re-exports.
+
+    `local` is the identifier the source module must declare; `exported` is the
+    name a caller holds. They differ under `export { X as Y }`.
+    """
     text = strip_comments(index.read_text(encoding="utf-8"), index)
-    names = []
+    entries = []
     for block in RE_EXPORT_BLOCK.finditer(text):
+        module = block.group("module")
         for raw in block.group("body").split(","):
-            entry = raw.strip()
+            entry = re.sub(r"^type\s+", "", raw.strip()).strip()
             if not entry:
                 continue
-            entry = re.sub(r"^type\s+", "", entry).strip()
-            # `X as Y` exports Y; the alias is the name a caller holds.
-            names.append(re.split(r"\s+as\s+", entry)[-STEP].strip())
-    if not names:
+            parts = re.split(r"\s+as\s+", entry)
+            entries.append((parts[NONE].strip(), parts[-STEP].strip(), module))
+    if not entries:
         raise SurfaceError(
             f"{index}: no re-exported names found. An empty surface is far more "
             "likely to be a broken scanner than a package that exports nothing."
         )
-    return names
+    return entries
+
+
+def module_path(dist: Path, index: Path, module: str) -> Path:
+    """Resolve an ES module specifier to the `.d.ts` beside it, or refuse."""
+    stem = re.sub(r"\.js$", "", module.lstrip("./"))
+    path = dist / f"{stem}.d.ts"
+    if not path.is_file():
+        raise SurfaceError(
+            f"{index} re-exports from '{module}', but {path} is not there. The "
+            "declarations are incomplete, so the surface is unknown, not smaller."
+        )
+    return path
+
+
+def declared_names(text: str) -> set:
+    """Every name a `.d.ts` declares for export, in any of its shapes."""
+    found = set()
+    for match in RE_DECLARATION.finditer(text):
+        for group in ("klass", "shape", "value"):
+            name = match.group(group)
+            if name:
+                found.add(name)
+    return found
 
 
 def build_surface(root: Path) -> list:
     dist = find_dist(root)
-    names = set(exported_names(dist / "index.d.ts"))
-    for source in sorted(dist.glob("*.d.ts")):
-        text = strip_comments(source.read_text(encoding="utf-8"), source)
+    index = dist / "index.d.ts"
+    entries = exported_names(index)
+
+    # Resolve every re-export against a declaration in the module it names. A
+    # mangled or truncated declaration stops matching rather than erroring, so
+    # without this the surface would silently come out shorter and the rule would
+    # read a removal nobody made.
+    bodies = {}
+    classes = {}
+    for local, exported, module in entries:
+        source = module_path(dist, index, module)
+        if source not in bodies:
+            bodies[source] = strip_comments(source.read_text(encoding="utf-8"), source)
+        if local not in declared_names(bodies[source]):
+            raise SurfaceError(
+                f"{index} re-exports '{local}' from '{module}', but {source} "
+                f"declares no such name. The surface is unknown, not smaller: a "
+                "shrink here would read as a breaking removal that never happened."
+            )
+        classes[(source, local)] = exported
+
+    names = {exported for _, exported, _ in entries}
+    for (source, local), exported in classes.items():
+        text = bodies[source]
         for head in RE_CLASS_HEAD.finditer(text):
-            class_name = head.group("name")
-            if class_name not in names:
+            if head.group("name") != local:
                 continue
-            body = class_body(text, head.end(), source, class_name)
+            body = class_body(text, head.end(), source, local)
             for method in public_method_names(body):
-                names.add(f"{class_name}.{method}")
+                names.add(f"{exported}.{method}")
     return sorted(names)
 
 
