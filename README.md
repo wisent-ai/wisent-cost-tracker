@@ -1,5 +1,14 @@
 # wisent-cost-tracker
 
+<!-- wisent-readme-signals:start -->
+[![CI](https://github.com/wisent-ai/wisent-cost-tracker/actions/workflows/version-check.yml/badge.svg?branch=main)](https://github.com/wisent-ai/wisent-cost-tracker/actions/workflows/version-check.yml)
+[![Release](https://img.shields.io/github/v/release/wisent-ai/wisent-cost-tracker?display_name=tag&sort=semver)](https://github.com/wisent-ai/wisent-cost-tracker/releases)
+[![Downloads](https://img.shields.io/github/downloads/wisent-ai/wisent-cost-tracker/total)](https://github.com/wisent-ai/wisent-cost-tracker/releases)
+[![License](https://img.shields.io/github/license/wisent-ai/wisent-cost-tracker)](https://github.com/wisent-ai/wisent-cost-tracker)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Wisent-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54)
+<!-- wisent-readme-signals:end -->
+
+
 Shared per-agent cost tracking + budget enforcement for Wisent services.
 
 Two thin clients (TypeScript + Python) reading the same canonical pricing
