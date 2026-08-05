@@ -36,3 +36,16 @@ class BudgetStatus:
     is_over_budget: bool
     period: BudgetPeriod
     starts_at: str
+
+
+@dataclass
+class BudgetDecision:
+    category: str
+    decision: Literal["allow", "deny"]
+    is_over_budget: bool
+    remaining_usd: float
+    records_considered: int
+    statuses: list[BudgetStatus]
+
+    def to_json(self) -> Dict[str, Any]:
+        return asdict(self)

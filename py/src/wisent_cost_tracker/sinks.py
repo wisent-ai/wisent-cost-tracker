@@ -1,7 +1,7 @@
 """CostSink implementations: in-memory, file, Supabase REST."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -18,12 +18,79 @@ class CostSink(Protocol):
 class MemorySink:
     def __init__(self) -> None:
         self.records: List[CostRecord] = []
+        self._budgets: Dict[tuple[str, str, BudgetPeriod, str], tuple[float, datetime]] = {}
 
     def write(self, records: List[CostRecord]) -> None:
         self.records.extend(records)
 
     def read(self, agent_id: str, since: datetime) -> List[CostRecord]:
-        return [r for r in self.records if r.agent_id == agent_id]
+        return [
+            record for record in self.records
+            if record.agent_id == agent_id and _record_timestamp(record) >= _datetime_timestamp(since)
+        ]
+
+    def write_budget(
+        self,
+        agent_id: str,
+        category: str,
+        allocated_usd: float,
+        period: BudgetPeriod,
+        starts_at: datetime,
+    ) -> None:
+        key = (agent_id, category, period, starts_at.isoformat())
+        self._budgets[key] = (allocated_usd, starts_at)
+
+    def read_budgets(self, agent_id: str) -> List[BudgetStatus]:
+        durations = {"daily": 1, "weekly": 7, "monthly": 30}
+        rows: List[BudgetStatus] = []
+        for (owner, category, period, _), (allocated, starts_at) in self._budgets.items():
+            if owner != agent_id:
+                continue
+            start_timestamp = _datetime_timestamp(starts_at)
+            end_timestamp = start_timestamp + durations[period] * 86400
+            spent = sum(
+                record.cost_usd
+                for record in self.records
+                if record.agent_id == agent_id
+                and _record_timestamp(record) >= start_timestamp
+                and _record_timestamp(record) < end_timestamp
+                and _record_matches_category(record, category)
+            )
+            remaining = allocated - spent
+            rows.append(
+                BudgetStatus(
+                    category=category,
+                    allocated_usd=allocated,
+                    spent_usd=spent,
+                    remaining_usd=remaining,
+                    utilization_pct=(spent / allocated * 100) if allocated > 0 else 0,
+                    is_over_budget=spent > allocated,
+                    period=period,
+                    starts_at=starts_at.isoformat(),
+                )
+            )
+        return rows
+
+
+def _datetime_timestamp(value: datetime) -> float:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
+def _record_timestamp(record: CostRecord) -> float:
+    if not record.created_at:
+        return 0
+    try:
+        return datetime.fromisoformat(record.created_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0
+
+
+def _record_matches_category(record: CostRecord, category: str) -> bool:
+    if category == "all":
+        return True
+    return record.service.startswith(f"{category}_")
 
 
 class FileSink:

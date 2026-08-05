@@ -15,7 +15,13 @@ from .pricing import (
     load_pricing,
 )
 from .sinks import MemorySink, FileSink, SupabaseSink
-from .types import CostRecord, BudgetStatus, BudgetPeriod
+from .types import BudgetDecision, BudgetPeriod, BudgetStatus, CostRecord
+from .onboarding import (
+    FIRST_SUCCESS_FACT,
+    JOURNEY_VERSION,
+    JOURNEY_VERSION_ID,
+    run_onboarding_action,
+)
 
 __all__ = [
     "CostTracker",
@@ -34,4 +40,9 @@ __all__ = [
     "CostRecord",
     "BudgetStatus",
     "BudgetPeriod",
+    "BudgetDecision",
+    "FIRST_SUCCESS_FACT",
+    "JOURNEY_VERSION",
+    "JOURNEY_VERSION_ID",
+    "run_onboarding_action",
 ]
