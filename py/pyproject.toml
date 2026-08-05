@@ -16,6 +16,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
+[project.scripts]
+wisent-cost-tracker-onboarding = "wisent_cost_tracker.onboarding:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

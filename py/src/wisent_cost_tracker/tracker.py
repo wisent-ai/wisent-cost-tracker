@@ -1,9 +1,9 @@
 """CostTracker — Python mirror of @wisent/cost-tracker."""
 
 import atexit
-import signal
 from dataclasses import dataclass
-from datetime import datetime
+import math
+import signal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +17,8 @@ from .pricing import (
 )
 from .sinks import CostSink, FileSink, MemorySink, SupabaseSink
 from .types import CostRecord
+
+_USAGE_TYPES = {"solves", "tokens", "bytes", "seconds", "units", "emails"}
 
 
 @dataclass
@@ -49,6 +51,8 @@ class CostTracker:
     def __init__(self, opts: CostTrackerOptions | None = None, **kwargs: Any) -> None:
         if opts is None:
             opts = CostTrackerOptions(**kwargs)
+        if not isinstance(opts.agent_id, str) or not opts.agent_id.strip():
+            raise ValueError("CostTracker: agent_id must be a non-empty string")
         self._opts = opts
         self._buffer: List[CostRecord] = []
         self._flushed = False
@@ -92,6 +96,14 @@ class CostTracker:
         reference_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> CostRecord:
+        if not isinstance(service, str) or not service.strip():
+            raise ValueError("CostTracker: service must be a non-empty string")
+        if usage_type not in _USAGE_TYPES:
+            raise ValueError(f"CostTracker: unsupported usage_type {usage_type!r}")
+        if type(usage_amount) not in (int, float) or not math.isfinite(usage_amount) or usage_amount <= 0:
+            raise ValueError("CostTracker: usage_amount must be a finite number greater than zero")
+        if type(cost_usd) not in (int, float) or not math.isfinite(cost_usd) or cost_usd < 0:
+            raise ValueError("CostTracker: cost_usd must be a finite non-negative number")
         rec = CostRecord(
             service=service,
             resource=resource,
@@ -191,6 +203,13 @@ class CostTracker:
             self._flushed = True
             return
         self._sink.write(self._buffer)
+        try:
+            from .onboarding import observe_accepted_usage
+
+            observe_accepted_usage(self._buffer)
+        except (OSError, TypeError, ValueError):
+            # First-use telemetry must never alter an accepted sink write.
+            pass
         self._flushed = True
 
     def get_sink(self) -> CostSink:
