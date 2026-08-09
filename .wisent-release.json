@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "product": "wisent-cost-tracker",
+  "releases": false,
+  "reason": "Both committed baselines state that npm and PyPI report the distributions absent and origin has no release tag; no artifact is currently published."
+}
