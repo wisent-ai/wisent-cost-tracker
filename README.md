@@ -10,7 +10,16 @@
 
 # wisent-cost-tracker
 
-Shared per-agent cost tracking + budget enforcement for Wisent services.
+Know What Every Agent Costs Before the Invoice Does.
+
+An agent that runs all night is either the cheapest colleague you have or a bill
+nobody approved, and today you find out at the end of the month. Wisent Cost
+Tracker records what each agent spends while it spends it, from TypeScript and
+from Python, against one canonical pricing table both clients read. Give an agent
+a budget and it is enforced, not reported afterwards. Usage lands as records you
+can total per agent, per service, per day.
+
+Per-Agent Spend, Enforced.
 
 Two thin clients (TypeScript + Python) reading the same canonical pricing
 table at `pricing/costs.json`. Both clients persist usage records to a
