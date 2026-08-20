@@ -1,15 +1,15 @@
 [automation]
 managed = true
-source_fingerprint = "09f341501db3db51"
-category = "agent"
+source_fingerprint = "86bb460b266864ef"
+category = "developer"
 
 [banner]
 title = "Track agent spend. Enforce every budget."
 description = "Shared TypeScript and Python clients with a Supabase backend for per-agent cost control."
 product = "Wisent"
-url = "wisent.ai"
+url = "wisent.com"
 theme = "dark"
-layout = "orbit-left"
+layout = "signal-left"
 art_seed = "wisent-cost-tracker"
 width = 1584
 height = 396
