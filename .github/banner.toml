@@ -1,11 +1,13 @@
 [automation]
 managed = true
-source_fingerprint = "86bb460b266864ef"
+source_fingerprint = "e49768ed5bbb9615"
 category = "developer"
+copy_status = "missing"
+approved_in = ""
 
 [banner]
-title = "Track agent spend. Enforce every budget."
-description = "Shared TypeScript and Python clients with a Supabase backend for per-agent cost control."
+title = "Wisent Cost Tracker"
+description = ""
 product = "Wisent"
 url = "wisent.com"
 theme = "dark"
