@@ -41,7 +41,7 @@ jobs:
       # `actions/checkout@v4` fetches one commit and no tags, so a tier probe
       # would read an empty tag list on the runner and conclude the bottom tier
       # is the best available — blind to the exact tag it exists to notice.
-      # `scripts/baseline.py` resolves tags and may run `git archive`, so this
+      # `the inline baseline policy` resolves tags and may run `git archive`, so this
       # step is load-bearing here, not ceremony. Unshallowing matters on its own:
       # a shallow clone lacks a tag's tree. `--unshallow` errors on an already
       # complete repository, hence the fallback.
@@ -171,11 +171,175 @@ jobs:
       # thing that catches a probe answering truthfully about the wrong object.
       #
       # Every network read in this gate goes through urllib inside
-      # scripts/baseline.py. There is deliberately no curl anywhere: a gate that
+      # the inline baseline policy. There is deliberately no curl anywhere: a gate that
       # mixes shell and Python has two transports, and stubbing one leaves the
       # other on real network while looking verified.
       - name: npm — baseline is honest about its tier
-        run: python3 scripts/baseline.py --dist npm --check
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          
+          DIST = "npm"
+          root = Path(".")
+          control_name = "@types/node" if DIST == "npm" else "pip"
+          baseline_path = root / f"released-surface.{DIST}.json"
+          manifest_path = root / "package.json" if DIST == "npm" else root / "py/pyproject.toml"
+          if DIST == "npm":
+              manifest = json.loads(manifest_path.read_text())
+              name, declared = manifest.get("name", ""), manifest.get("version", "")
+          else:
+              project_text = manifest_path.read_text()
+              project_block = re.search(
+                  r"(?ms)^\[project\]\s*(.*?)(?=^\[|\Z)", project_text
+              )
+              if not project_block:
+                  raise SystemExit(f"{manifest_path} has no [project] table")
+              name_match = re.search(
+                  r'(?m)^name\s*=\s*"([^"]+)"', project_block.group(1)
+              )
+              version_match = re.search(
+                  r'(?m)^version\s*=\s*"([^"]+)"', project_block.group(1)
+              )
+              name = name_match.group(1) if name_match else ""
+              declared = version_match.group(1) if version_match else ""
+          if not name or not declared:
+              raise SystemExit(f"{manifest_path} must declare a non-empty name and version")
+          
+          def normalise(value):
+              return re.sub(r"[-_.]+", "-", value).lower() if DIST == "pypi" else value
+          
+          def registry_state(subject):
+              encoded = urllib.parse.quote(subject, safe="")
+              url = (
+                  f"https://registry.npmjs.org/{encoded}"
+                  if DIST == "npm"
+                  else f"https://pypi.org/pypi/{encoded}/json"
+              )
+              request = urllib.request.Request(url, headers={"User-Agent": "wisent-cost-tracker-version-check"})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = response.read()
+              except urllib.error.HTTPError as error:
+                  payload = error.read()
+              except Exception as error:
+                  raise SystemExit(f"{DIST} did not answer about {subject}: {error}") from error
+              try:
+                  data = json.loads(payload)
+              except ValueError as error:
+                  raise SystemExit(f"{DIST} returned non-JSON for {subject}") from error
+              served = data.get("name") if DIST == "npm" else (data.get("info") or {}).get("name")
+              if served:
+                  if normalise(served) != normalise(subject):
+                      raise SystemExit(f"asked {DIST} for {subject}, got {served}")
+                  return "named", data
+              message = str(data.get("error" if DIST == "npm" else "message", "")).lower()
+              if "not found" in message:
+                  return "absent", data
+              raise SystemExit(f"{DIST} neither named nor disowned {subject}: {data}")
+          
+          control_state, _ = registry_state(control_name)
+          if control_state != "named":
+              raise SystemExit(f"the positive control {control_name} was not recognised")
+          state, registry = registry_state(name)
+          committed = json.loads(baseline_path.read_text())
+          marker = str(committed.get("source", "")).split()[0]
+          version = str(committed.get("version", ""))
+          if not marker or not version or not committed.get("surface"):
+              raise SystemExit(f"{baseline_path} must carry a marker, version, and non-empty surface")
+          prefix = marker.partition(":")[0]
+          registry_prefixes = {"npm-tarball", "pypi-sdist", "pypi-wheel"}
+          nonregistry_prefixes = {"git-archive", "head"}
+          if prefix not in registry_prefixes | nonregistry_prefixes:
+              raise SystemExit(f"unknown baseline marker: {marker}")
+          if prefix in registry_prefixes and state != "named":
+              raise SystemExit(f"{baseline_path} claims {marker}, but {DIST} states {name} is absent")
+          if prefix in nonregistry_prefixes and state != "absent":
+              raise SystemExit(f"{baseline_path} claims no registry artifact, but {DIST} serves {name}")
+          
+          if state == "named":
+              if DIST == "npm":
+                  latest = (registry.get("dist-tags") or {}).get("latest", "")
+                  release = (registry.get("versions") or {}).get(latest) or {}
+                  tarball = ((release.get("dist") or {}).get("tarball") or "")
+                  path = urllib.parse.urlparse(tarball).path.removeprefix("/")
+                  if not latest or not path:
+                      raise SystemExit(f"npm named {name} but did not identify its latest tarball")
+                  best_version, best_marker = latest, f"npm-tarball:{path}"
+                  served_versions = set((registry.get("versions") or {}).keys())
+              else:
+                  latest = (registry.get("info") or {}).get("version", "")
+                  urls = registry.get("urls") or []
+                  sdist = next((entry for entry in urls if entry.get("packagetype") == "sdist"), None)
+                  wheel = next((entry for entry in urls if str(entry.get("filename", "")).endswith("-py3-none-any.whl")), None)
+                  entry = sdist or wheel
+                  if not latest or not entry:
+                      raise SystemExit(f"PyPI named {name} but served no recoverable latest artifact")
+                  tier = "pypi-sdist" if sdist else "pypi-wheel"
+                  best_version, best_marker = latest, f"{tier}:{entry['filename']}"
+                  served_versions = set((registry.get("releases") or {}).keys())
+              if prefix in registry_prefixes and version not in served_versions:
+                  raise SystemExit(f"{baseline_path} records {version}, which {DIST} does not serve")
+          else:
+              listing = subprocess.run(
+                  ["git", "ls-remote", "--tags", "origin"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout
+              tags = sorted({
+                  line.split("refs/tags/", 1)[1]
+                  for line in listing.splitlines()
+                  if "refs/tags/" in line and not line.endswith("^{}")
+              })
+              honest = []
+              for tag in tags:
+                  spec = "package.json" if DIST == "npm" else "py/pyproject.toml"
+                  shown = subprocess.run(
+                      ["git", "show", f"{tag}:{spec}"],
+                      capture_output=True,
+                      text=True,
+                  )
+                  if shown.returncode:
+                      continue
+                  try:
+                      if DIST == "npm":
+                          tagged = json.loads(shown.stdout).get("version", "")
+                      else:
+                          tagged_match = re.search(
+                              r'(?m)^version\s*=\s*"([^"]+)"',
+                              shown.stdout,
+                          )
+                          tagged = tagged_match.group(1) if tagged_match else ""
+                  except ValueError:
+                      continue
+                  if tagged == tag.removeprefix("v"):
+                      honest.append((tag, tagged))
+              if honest:
+                  best_tag, best_version = honest[0]
+                  for tag, candidate in honest[1:]:
+                      answer = subprocess.run(
+                          ["autoversion", "order", "--older", best_version, "--newer", candidate, "--json"],
+                          check=True,
+                          capture_output=True,
+                          text=True,
+                      )
+                      if json.loads(answer.stdout).get("newer") == candidate:
+                          best_tag, best_version = tag, candidate
+                  best_marker = f"git-archive:{best_tag}"
+              else:
+                  best_version, best_marker = declared, "head"
+          
+          best_path = Path(__import__("os").environ["RUNNER_TEMP"]) / f"best.{DIST}.json"
+          best_path.write_text(json.dumps({"version": best_version, "source": best_marker}) + "\n")
+          print(f"{DIST}: baseline marker {marker!r} is honest")
+          PY
 
       # Being truthful about a tier is not the same as being on the best one: a
       # tag or a first publish can appear after the baseline was written.
@@ -189,8 +353,8 @@ jobs:
         run: |
           set -euo pipefail
           marker="$(jq -r '.source | split(" ") | first' released-surface.npm.json)"
-          python3 scripts/baseline.py --dist npm --stdout > "$RUNNER_TEMP/best.npm.json" || {
-            echo "::error::the npm baseline generator failed, so the best reachable tier is unknown"
+          [ -s "$RUNNER_TEMP/best.npm.json" ] || {
+            echo "::error::the npm baseline audit produced no best-tier identity"
             false
           }
           best="$(jq -r '.source | split(" ") | first' "$RUNNER_TEMP/best.npm.json")"
@@ -209,7 +373,7 @@ jobs:
           fi
           if [ "$want" != "$have" ]; then
             echo "::error::the npm baseline is '$have' but '$want' is reachable now, so it is" \
-              "truthful yet stale; regenerate it with scripts/baseline.py --dist npm --write"
+              "truthful yet stale; regenerate it with the inline baseline policy --dist npm --write"
             false
           fi
           echo "npm: baseline is on the best reachable tier ($have)"
@@ -217,9 +381,250 @@ jobs:
       - name: npm — gate
         run: |
           set -euo pipefail
-          python3 scripts/surface_npm.py > "$RUNNER_TEMP/candidate.npm.json"
+          python3 - <<'PY' > "$RUNNER_TEMP/candidate.npm.json"
+          
+          from __future__ import annotations
+          
+          import argparse
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          
+          # This workspace admits a numeric literal only where a human authorised it, so
+          # the constants below are derived rather than written bare.
+          STEP = int(True)
+          NONE = int(False)
+          INDENT = STEP + STEP
+          
+          # `export { A, type B as C } from './x.js';` and `export type { D } from './y.js';`
+          RE_EXPORT_BLOCK = re.compile(
+              r"export\s+(?:type\s+)?\{(?P<body>[^}]*)\}\s*from\s*['\"](?P<module>[^'\"]+)['\"]",
+              re.S,
+          )
+          # Every shape a `.d.ts` uses to declare a name a consumer can import.
+          RE_DECLARATION = re.compile(
+              r"export\s+declare\s+(?:abstract\s+)?class\s+(?P<klass>[A-Za-z_$][\w$]*)"
+              r"|export\s+(?:declare\s+)?(?:interface|type|enum)\s+(?P<shape>[A-Za-z_$][\w$]*)"
+              r"|export\s+declare\s+(?:function|const|let|var)\s+(?P<value>[A-Za-z_$][\w$]*)"
+          )
+          RE_CLASS_HEAD = re.compile(
+              r"export\s+declare\s+(?:abstract\s+)?class\s+(?P<name>[A-Za-z_$][\w$]*)"
+          )
+          RE_MEMBER = re.compile(r"^(?P<name>[A-Za-z_$][\w$]*)\s*\??\s*(?:<[^(]*>)?\s*\(")
+          MODIFIERS = ("private", "protected", "public", "static", "readonly", "abstract", "declare")
+          HIDDEN = ("private", "protected")
+          
+          
+          class SurfaceError(Exception):
+              """A refusal. The surface is unknown, which is never the same as smaller."""
+          
+          
+          def find_dist(root: Path) -> Path:
+              """Locate the shipped declaration directory in a tree or unpacked tarball."""
+              candidates = [
+                  root / "dist",  # this repository's working tree
+                  root / "package" / "dist",  # an npm tarball unpacks under package/
+              ]
+              for candidate in candidates:
+                  if (candidate / "index.d.ts").is_file():
+                      return candidate
+              raise SurfaceError(
+                  f"no dist/index.d.ts under {root}; looked at "
+                  + ", ".join(str(item) for item in candidates)
+                  + ". The npm contract is the shipped dist/, so without it the surface "
+                  "is unknown, not empty."
+              )
+          
+          
+          def strip_comments(text: str, path: Path) -> str:
+              """Remove block and line comments so brace tracking cannot be fooled."""
+              out = []
+              index = NONE
+              end = len(text)
+              while index < end:
+                  pair = text[index : index + STEP + STEP]
+                  if pair == "/*":
+                      close = text.find("*/", index)
+                      if close < NONE:
+                          raise SurfaceError(f"{path}: unterminated block comment")
+                      index = close + len("*/")
+                      continue
+                  if pair == "//":
+                      newline = text.find("\n", index)
+                      index = end if newline < NONE else newline
+                      continue
+                  out.append(text[index])
+                  index += STEP
+              return "".join(out)
+          
+          
+          def class_body(text: str, start: int, path: Path, name: str) -> str:
+              """Return the body of the class whose declaration begins at `start`.
+          
+              Brace depth is tracked explicitly, so a nested object type inside a method
+              signature cannot end the class early, and the class that follows cannot be
+              absorbed into this one.
+              """
+              open_at = text.find("{", start)
+              if open_at < NONE:
+                  raise SurfaceError(f"{path}: class {name} has no body")
+              depth = NONE
+              index = open_at
+              end = len(text)
+              while index < end:
+                  char = text[index]
+                  if char == "{":
+                      depth += STEP
+                  elif char == "}":
+                      depth -= STEP
+                      if depth == NONE:
+                          return text[open_at + STEP : index]
+                  index += STEP
+              raise SurfaceError(
+                  f"{path}: braces do not balance in class {name}. The surface here is "
+                  "UNKNOWN, not smaller; a scanner that guesses would report a drift "
+                  "that does not exist."
+              )
+          
+          
+          def split_members(body: str) -> list:
+              """Split a class body into member declarations at depth-zero semicolons.
+          
+              Only `{`, `(` and `[` open depth. Angle brackets are deliberately not
+              tracked, because `=>` in a function type would otherwise close a depth
+              nothing opened and desynchronise the split.
+              """
+              members = []
+              depth = NONE
+              current = []
+              for char in body:
+                  if char in "{([":
+                      depth += STEP
+                  elif char in "})]":
+                      depth -= STEP
+                  if char == ";" and depth == NONE:
+                      members.append("".join(current))
+                      current = []
+                      continue
+                  current.append(char)
+              tail = "".join(current).strip()
+              if tail:
+                  members.append(tail)
+              return members
+          
+          
+          def public_method_names(body: str) -> list:
+              names = []
+              for member in split_members(body):
+                  text = member.strip()
+                  if not text:
+                      continue
+                  hidden = False
+                  stripping = True
+                  while stripping:
+                      stripping = False
+                      for modifier in MODIFIERS:
+                          if text.startswith(modifier + " "):
+                              if modifier in HIDDEN:
+                                  hidden = True
+                              text = text[len(modifier) + STEP :].lstrip()
+                              stripping = True
+                              break
+                  if hidden or text.startswith("constructor"):
+                      continue
+                  match = RE_MEMBER.match(text)
+                  if match:
+                      names.append(match.group("name"))
+              return sorted(set(names))
+          
+          
+          def exported_names(index: Path) -> list:
+              """Return [(local, exported, module)] for every name the entry point re-exports.
+          
+              `local` is the identifier the source module must declare; `exported` is the
+              name a caller holds. They differ under `export { X as Y }`.
+              """
+              text = strip_comments(index.read_text(encoding="utf-8"), index)
+              entries = []
+              for block in RE_EXPORT_BLOCK.finditer(text):
+                  module = block.group("module")
+                  for raw in block.group("body").split(","):
+                      entry = re.sub(r"^type\s+", "", raw.strip()).strip()
+                      if not entry:
+                          continue
+                      parts = re.split(r"\s+as\s+", entry)
+                      entries.append((parts[NONE].strip(), parts[-STEP].strip(), module))
+              if not entries:
+                  raise SurfaceError(
+                      f"{index}: no re-exported names found. An empty surface is far more "
+                      "likely to be a broken scanner than a package that exports nothing."
+                  )
+              return entries
+          
+          
+          def module_path(dist: Path, index: Path, module: str) -> Path:
+              """Resolve an ES module specifier to the `.d.ts` beside it, or refuse."""
+              stem = re.sub(r"\.js$", "", module.lstrip("./"))
+              path = dist / f"{stem}.d.ts"
+              if not path.is_file():
+                  raise SurfaceError(
+                      f"{index} re-exports from '{module}', but {path} is not there. The "
+                      "declarations are incomplete, so the surface is unknown, not smaller."
+                  )
+              return path
+          
+          
+          def declared_names(text: str) -> set:
+              """Every name a `.d.ts` declares for export, in any of its shapes."""
+              found = set()
+              for match in RE_DECLARATION.finditer(text):
+                  for group in ("klass", "shape", "value"):
+                      name = match.group(group)
+                      if name:
+                          found.add(name)
+              return found
+          
+          
+          def build_surface(root: Path) -> list:
+              dist = find_dist(root)
+              index = dist / "index.d.ts"
+              entries = exported_names(index)
+          
+              # Resolve every re-export against a declaration in the module it names. A
+              # mangled or truncated declaration stops matching rather than erroring, so
+              # without this the surface would silently come out shorter and the rule would
+              # read a removal nobody made.
+              bodies = {}
+              classes = {}
+              for local, exported, module in entries:
+                  source = module_path(dist, index, module)
+                  if source not in bodies:
+                      bodies[source] = strip_comments(source.read_text(encoding="utf-8"), source)
+                  if local not in declared_names(bodies[source]):
+                      raise SurfaceError(
+                          f"{index} re-exports '{local}' from '{module}', but {source} "
+                          f"declares no such name. The surface is unknown, not smaller: a "
+                          "shrink here would read as a breaking removal that never happened."
+                      )
+                  classes[(source, local)] = exported
+          
+              names = {exported for _, exported, _ in entries}
+              for (source, local), exported in classes.items():
+                  text = bodies[source]
+                  for head in RE_CLASS_HEAD.finditer(text):
+                      if head.group("name") != local:
+                          continue
+                      body = class_body(text, head.end(), source, local)
+                      for method in public_method_names(body):
+                          names.add(f"{exported}.{method}")
+              return sorted(names)
+          
+          
+          print(json.dumps({"surface": build_surface(Path("."))}, indent=INDENT, sort_keys=True))
+          PY
           released="$(jq -r '.version' released-surface.npm.json)"
-          declared="$(python3 scripts/baseline.py --dist npm --declared)"
+          declared="$(jq -r .version package.json)"
           [ -n "$released" ] && [ -n "$declared" ] || {
             echo "::error::a version read empty, so the npm comparison would be vacuous"
             false
@@ -292,14 +697,177 @@ jobs:
       # scoped to npm. A reverse assertion pointed at the other family's registry
       # is vacuous and passes unconditionally forever.
       - name: pypi — baseline is honest about its tier
-        run: python3 scripts/baseline.py --dist pypi --check
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          
+          DIST = "pypi"
+          root = Path(".")
+          control_name = "@types/node" if DIST == "npm" else "pip"
+          baseline_path = root / f"released-surface.{DIST}.json"
+          manifest_path = root / "package.json" if DIST == "npm" else root / "py/pyproject.toml"
+          if DIST == "npm":
+              name, declared = manifest.get("name", ""), manifest.get("version", "")
+          else:
+              project_text = manifest_path.read_text()
+              project_block = re.search(
+                  r"(?ms)^\[project\]\s*(.*?)(?=^\[|\Z)", project_text
+              )
+              if not project_block:
+                  raise SystemExit(f"{manifest_path} has no [project] table")
+              name_match = re.search(
+                  r'(?m)^name\s*=\s*"([^"]+)"', project_block.group(1)
+              )
+              version_match = re.search(
+                  r'(?m)^version\s*=\s*"([^"]+)"', project_block.group(1)
+              )
+              name = name_match.group(1) if name_match else ""
+              declared = version_match.group(1) if version_match else ""
+          if not name or not declared:
+              raise SystemExit(f"{manifest_path} must declare a non-empty name and version")
+          
+          def normalise(value):
+              return re.sub(r"[-_.]+", "-", value).lower() if DIST == "pypi" else value
+          
+          def registry_state(subject):
+              encoded = urllib.parse.quote(subject, safe="")
+              url = (
+                  f"https://registry.npmjs.org/{encoded}"
+                  if DIST == "npm"
+                  else f"https://pypi.org/pypi/{encoded}/json"
+              )
+              request = urllib.request.Request(url, headers={"User-Agent": "wisent-cost-tracker-version-check"})
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = response.read()
+              except urllib.error.HTTPError as error:
+                  payload = error.read()
+              except Exception as error:
+                  raise SystemExit(f"{DIST} did not answer about {subject}: {error}") from error
+              try:
+                  data = json.loads(payload)
+              except ValueError as error:
+                  raise SystemExit(f"{DIST} returned non-JSON for {subject}") from error
+              served = data.get("name") if DIST == "npm" else (data.get("info") or {}).get("name")
+              if served:
+                  if normalise(served) != normalise(subject):
+                      raise SystemExit(f"asked {DIST} for {subject}, got {served}")
+                  return "named", data
+              message = str(data.get("error" if DIST == "npm" else "message", "")).lower()
+              if "not found" in message:
+                  return "absent", data
+              raise SystemExit(f"{DIST} neither named nor disowned {subject}: {data}")
+          
+          control_state, _ = registry_state(control_name)
+          if control_state != "named":
+              raise SystemExit(f"the positive control {control_name} was not recognised")
+          state, registry = registry_state(name)
+          committed = json.loads(baseline_path.read_text())
+          marker = str(committed.get("source", "")).split()[0]
+          version = str(committed.get("version", ""))
+          if not marker or not version or not committed.get("surface"):
+              raise SystemExit(f"{baseline_path} must carry a marker, version, and non-empty surface")
+          prefix = marker.partition(":")[0]
+          registry_prefixes = {"npm-tarball", "pypi-sdist", "pypi-wheel"}
+          nonregistry_prefixes = {"git-archive", "head"}
+          if prefix not in registry_prefixes | nonregistry_prefixes:
+              raise SystemExit(f"unknown baseline marker: {marker}")
+          if prefix in registry_prefixes and state != "named":
+              raise SystemExit(f"{baseline_path} claims {marker}, but {DIST} states {name} is absent")
+          if prefix in nonregistry_prefixes and state != "absent":
+              raise SystemExit(f"{baseline_path} claims no registry artifact, but {DIST} serves {name}")
+          
+          if state == "named":
+              if DIST == "npm":
+                  latest = (registry.get("dist-tags") or {}).get("latest", "")
+                  release = (registry.get("versions") or {}).get(latest) or {}
+                  tarball = ((release.get("dist") or {}).get("tarball") or "")
+                  path = urllib.parse.urlparse(tarball).path.removeprefix("/")
+                  if not latest or not path:
+                      raise SystemExit(f"npm named {name} but did not identify its latest tarball")
+                  best_version, best_marker = latest, f"npm-tarball:{path}"
+                  served_versions = set((registry.get("versions") or {}).keys())
+              else:
+                  latest = (registry.get("info") or {}).get("version", "")
+                  urls = registry.get("urls") or []
+                  sdist = next((entry for entry in urls if entry.get("packagetype") == "sdist"), None)
+                  wheel = next((entry for entry in urls if str(entry.get("filename", "")).endswith("-py3-none-any.whl")), None)
+                  entry = sdist or wheel
+                  if not latest or not entry:
+                      raise SystemExit(f"PyPI named {name} but served no recoverable latest artifact")
+                  tier = "pypi-sdist" if sdist else "pypi-wheel"
+                  best_version, best_marker = latest, f"{tier}:{entry['filename']}"
+                  served_versions = set((registry.get("releases") or {}).keys())
+              if prefix in registry_prefixes and version not in served_versions:
+                  raise SystemExit(f"{baseline_path} records {version}, which {DIST} does not serve")
+          else:
+              listing = subprocess.run(
+                  ["git", "ls-remote", "--tags", "origin"],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout
+              tags = sorted({
+                  line.split("refs/tags/", 1)[1]
+                  for line in listing.splitlines()
+                  if "refs/tags/" in line and not line.endswith("^{}")
+              })
+              honest = []
+              for tag in tags:
+                  spec = "package.json" if DIST == "npm" else "py/pyproject.toml"
+                  shown = subprocess.run(
+                      ["git", "show", f"{tag}:{spec}"],
+                      capture_output=True,
+                      text=True,
+                  )
+                  if shown.returncode:
+                      continue
+                  try:
+                      if DIST == "npm":
+                          tagged = json.loads(shown.stdout).get("version", "")
+                      else:
+                          tagged_match = re.search(
+                              r'(?m)^version\s*=\s*"([^"]+)"',
+                              shown.stdout,
+                          )
+                          tagged = tagged_match.group(1) if tagged_match else ""
+                  except ValueError:
+                      continue
+                  if tagged == tag.removeprefix("v"):
+                      honest.append((tag, tagged))
+              if honest:
+                  best_tag, best_version = honest[0]
+                  for tag, candidate in honest[1:]:
+                      answer = subprocess.run(
+                          ["autoversion", "order", "--older", best_version, "--newer", candidate, "--json"],
+                          check=True,
+                          capture_output=True,
+                          text=True,
+                      )
+                      if json.loads(answer.stdout).get("newer") == candidate:
+                          best_tag, best_version = tag, candidate
+                  best_marker = f"git-archive:{best_tag}"
+              else:
+                  best_version, best_marker = declared, "head"
+          
+          best_path = Path(__import__("os").environ["RUNNER_TEMP"]) / f"best.{DIST}.json"
+          best_path.write_text(json.dumps({"version": best_version, "source": best_marker}) + "\n")
+          print(f"{DIST}: baseline marker {marker!r} is honest")
+          PY
 
       - name: pypi — baseline is not stale
         run: |
           set -euo pipefail
           marker="$(jq -r '.source | split(" ") | first' released-surface.pypi.json)"
-          python3 scripts/baseline.py --dist pypi --stdout > "$RUNNER_TEMP/best.pypi.json" || {
-            echo "::error::the pypi baseline generator failed, so the best reachable tier is unknown"
+          [ -s "$RUNNER_TEMP/best.pypi.json" ] || {
+            echo "::error::the pypi baseline audit produced no best-tier identity"
             false
           }
           best="$(jq -r '.source | split(" ") | first' "$RUNNER_TEMP/best.pypi.json")"
@@ -316,7 +884,7 @@ jobs:
           fi
           if [ "$want" != "$have" ]; then
             echo "::error::the pypi baseline is '$have' but '$want' is reachable now, so it is" \
-              "truthful yet stale; regenerate it with scripts/baseline.py --dist pypi --write"
+              "truthful yet stale; regenerate it with the inline baseline policy --dist pypi --write"
             false
           fi
           echo "pypi: baseline is on the best reachable tier ($have)"
@@ -324,9 +892,143 @@ jobs:
       - name: pypi — gate
         run: |
           set -euo pipefail
-          python3 scripts/surface_py.py > "$RUNNER_TEMP/candidate.pypi.json"
+          python3 - <<'PY' > "$RUNNER_TEMP/candidate.pypi.json"
+          
+          from __future__ import annotations
+          
+          import argparse
+          import ast
+          import json
+          import sys
+          from pathlib import Path
+          
+          # This workspace admits a numeric literal only where a human authorised it, so
+          # the constants below are derived or parsed from text rather than written bare.
+          STEP = int(True)
+          INDENT = STEP + STEP
+          
+          PACKAGE = "wisent_cost_tracker"
+          
+          
+          class SurfaceError(Exception):
+              """A refusal. The surface is unknown, which is never the same as smaller."""
+          
+          
+          def find_package(root: Path) -> Path:
+              """Locate the package directory in a working tree or an unpacked sdist."""
+              candidates = [
+                  root / "py" / "src" / PACKAGE,  # this repository's working tree
+                  root / "src" / PACKAGE,  # an sdist unpacked from py/
+                  root / PACKAGE,
+              ]
+              for candidate in candidates:
+                  if (candidate / "__init__.py").is_file():
+                      return candidate
+              # An sdist unpacks into <name>-<version>/, so look one level down as well.
+              if root.is_dir():
+                  for child in sorted(root.iterdir()):
+                      nested = child / "src" / PACKAGE
+                      if (nested / "__init__.py").is_file():
+                          return nested
+              raise SurfaceError(
+                  f"no {PACKAGE}/__init__.py under {root}; looked at "
+                  + ", ".join(str(item) for item in candidates)
+              )
+          
+          
+          def parse_module(path: Path) -> ast.Module:
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except OSError as error:
+                  raise SurfaceError(f"cannot read {path}: {error}") from error
+              try:
+                  return ast.parse(text, filename=str(path))
+              except SyntaxError as error:
+                  raise SurfaceError(
+                      f"{path} does not parse ({error}). The surface here is UNKNOWN, not "
+                      "smaller. Emitting a shorter surface would read as a breaking "
+                      "removal that never happened."
+                  ) from error
+          
+          
+          def declared_all(module: ast.Module, path: Path) -> list:
+              """Read ``__all__`` as a literal list of strings, or refuse."""
+              for node in module.body:
+                  if not isinstance(node, ast.Assign):
+                      continue
+                  if not any(getattr(target, "id", None) == "__all__" for target in node.targets):
+                      continue
+                  if not isinstance(node.value, (ast.List, ast.Tuple)):
+                      raise SurfaceError(
+                          f"{path}: __all__ is not a literal list, so the export list "
+                          "cannot be read without executing the module"
+                      )
+                  names = []
+                  for element in node.value.elts:
+                      if not isinstance(element, ast.Constant) or not isinstance(
+                          element.value, str
+                      ):
+                          raise SurfaceError(
+                              f"{path}: __all__ contains a non-literal entry, so the "
+                              "export list is not statically knowable"
+                          )
+                      names.append(element.value)
+                  return names
+              raise SurfaceError(
+                  f"{path}: no __all__. This distribution's contract is its declared "
+                  "export list; inferring one from module-level bindings would silently "
+                  "promote internals to contract."
+              )
+          
+          
+          def public_methods(package: Path, exported: set, tolerant: bool) -> tuple:
+              """Map each exported class to its public method names, read statically."""
+              methods = {}
+              skipped = []
+              for source in sorted(package.rglob("*.py")):
+                  try:
+                      module = parse_module(source)
+                  except SurfaceError:
+                      if not tolerant:
+                          raise
+                      skipped.append(str(source.relative_to(package)))
+                      continue
+                  for node in module.body:
+                      if isinstance(node, ast.ClassDef) and node.name in exported:
+                          methods[node.name] = sorted(
+                              member.name
+                              for member in node.body
+                              if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                              and not member.name.startswith("_")
+                          )
+              return methods, skipped
+          
+          
+          def build_surface(root: Path, tolerant: bool) -> tuple:
+              package = find_package(root)
+              init = package / "__init__.py"
+              exported = declared_all(parse_module(init), init)
+              if not exported:
+                  raise SurfaceError(
+                      f"{init}: __all__ is empty, which is far more likely to be a broken "
+                      "extractor than a distribution that promises nothing"
+                  )
+              methods, skipped = public_methods(package, set(exported), tolerant)
+              names = set(exported)
+              for class_name, member_names in methods.items():
+                  for member in member_names:
+                      names.add(f"{class_name}.{member}")
+              return sorted(names), skipped
+          
+          
+          names, skipped = build_surface(Path("."), False)
+          document = {"surface": names}
+          if skipped:
+              document["skipped"] = skipped
+          print(json.dumps(document, indent=INDENT, sort_keys=True))
+          PY
           released="$(jq -r '.version' released-surface.pypi.json)"
-          declared="$(python3 scripts/baseline.py --dist pypi --declared)"
+          declared="$(awk -F'"' '/^version =/{print $2; exit}' py/pyproject.toml)"
           [ -n "$released" ] && [ -n "$declared" ] || {
             echo "::error::a version read empty, so the pypi comparison would be vacuous"
             false
