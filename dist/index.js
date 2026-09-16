@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SupabaseSink = exports.FileSink = exports.MemorySink = exports.computeCost = exports.llmCost = exports.proxyCostForBytes = exports.smsPrice = exports.captchaPrice = exports.loadPricing = exports.PRICES = exports.BudgetManager = exports.CostTracker = void 0;
-var tracker_js_1 = require("./tracker.js");
+var tracker_js_1 = require("./spend/tracker.js");
 Object.defineProperty(exports, "CostTracker", { enumerable: true, get: function () { return tracker_js_1.CostTracker; } });
-var budget_js_1 = require("./budget.js");
+var budget_js_1 = require("./spend/budget.js");
 Object.defineProperty(exports, "BudgetManager", { enumerable: true, get: function () { return budget_js_1.BudgetManager; } });
 var pricing_js_1 = require("./pricing.js");
 Object.defineProperty(exports, "PRICES", { enumerable: true, get: function () { return pricing_js_1.PRICES; } });
@@ -13,7 +13,7 @@ Object.defineProperty(exports, "smsPrice", { enumerable: true, get: function () 
 Object.defineProperty(exports, "proxyCostForBytes", { enumerable: true, get: function () { return pricing_js_1.proxyCostForBytes; } });
 Object.defineProperty(exports, "llmCost", { enumerable: true, get: function () { return pricing_js_1.llmCost; } });
 Object.defineProperty(exports, "computeCost", { enumerable: true, get: function () { return pricing_js_1.computeCost; } });
-var sinks_js_1 = require("./sinks.js");
+var sinks_js_1 = require("./spend/sinks.js");
 Object.defineProperty(exports, "MemorySink", { enumerable: true, get: function () { return sinks_js_1.MemorySink; } });
 Object.defineProperty(exports, "FileSink", { enumerable: true, get: function () { return sinks_js_1.FileSink; } });
 Object.defineProperty(exports, "SupabaseSink", { enumerable: true, get: function () { return sinks_js_1.SupabaseSink; } });

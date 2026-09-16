@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CostTracker = void 0;
 const sinks_js_1 = require("./sinks.js");
-const pricing_js_1 = require("./pricing.js");
+const pricing_js_1 = require("../pricing.js");
 class CostTracker {
     sink;
     buffer = [];

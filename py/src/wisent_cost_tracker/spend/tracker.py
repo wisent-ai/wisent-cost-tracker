@@ -1,6 +1,7 @@
 """CostTracker — Python mirror of @wisent/cost-tracker."""
 
 import atexit
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import math
 import signal
@@ -112,7 +113,7 @@ class CostTracker:
             cost_usd=_round4(cost_usd),
             reference_id=reference_id or self._opts.reference_id,
             metadata=metadata or {},
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             agent_id=self._opts.agent_id,
         )
         self._buffer.append(rec)
@@ -204,7 +205,7 @@ class CostTracker:
             return
         self._sink.write(self._buffer)
         try:
-            from .onboarding import observe_accepted_usage
+            from ..onboarding import observe_accepted_usage
 
             observe_accepted_usage(self._buffer)
         except (OSError, TypeError, ValueError):

@@ -1,4 +1,4 @@
-import type { BudgetPeriod, BudgetStatus, CostSink } from './types.js';
+import type { BudgetPeriod, BudgetStatus, CostSink } from '../types.js';
 import { type SupabaseSinkOptions } from './sinks.js';
 export interface BudgetManagerOptions {
     agent_id: string;

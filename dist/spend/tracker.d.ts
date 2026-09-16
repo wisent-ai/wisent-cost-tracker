@@ -1,4 +1,4 @@
-import type { CostRecord, CostSink } from './types.js';
+import type { CostRecord, CostSink } from '../types.js';
 import { type SupabaseSinkOptions } from './sinks.js';
 export interface CostTrackerOptions {
     agent_id: string;

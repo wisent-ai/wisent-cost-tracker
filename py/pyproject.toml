@@ -24,3 +24,11 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 wisent_cost_tracker = ["pricing/*.json"]
+
+# The Python tests live in the repository's tests/ directory and are run from
+# here, with `pytest` in py/. pythonpath puts the package under test on the
+# import path, so no test file patches sys.path and no editable install is
+# needed to run them.
+[tool.pytest.ini_options]
+testpaths = ["../tests"]
+pythonpath = ["src"]

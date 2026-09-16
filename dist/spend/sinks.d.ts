@@ -1,7 +1,7 @@
 /**
  * Built-in CostSink implementations: in-memory, local-file, Supabase.
  */
-import type { CostRecord, CostSink, BudgetStatus, BudgetPeriod } from './types.js';
+import type { CostRecord, CostSink, BudgetStatus, BudgetPeriod } from '../types.js';
 export declare class MemorySink implements CostSink {
     records: CostRecord[];
     write(records: CostRecord[]): Promise<void>;

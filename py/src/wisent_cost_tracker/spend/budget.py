@@ -58,7 +58,7 @@ class BudgetManager:
         ]
         if rows:
             try:
-                from .onboarding import observe_budget_status
+                from ..onboarding import observe_budget_status
 
                 observe_budget_status(rows)
             except (OSError, TypeError, ValueError):
@@ -103,7 +103,7 @@ class BudgetManager:
             statuses=statuses,
         )
         try:
-            from .onboarding import observe_budget_decision
+            from ..onboarding import observe_budget_decision
 
             for record in reversed(matching):
                 if observe_budget_decision(record, decision):
