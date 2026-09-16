@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-from .types import BudgetPeriod, BudgetStatus, CostRecord
+from ..types import BudgetPeriod, BudgetStatus, CostRecord
 
 
 class CostSink(Protocol):

@@ -4,7 +4,7 @@
 
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { CostRecord, CostSink, BudgetStatus, BudgetPeriod } from './types.js';
+import type { CostRecord, CostSink, BudgetStatus, BudgetPeriod } from '../types.js';
 
 export class MemorySink implements CostSink {
   records: CostRecord[] = [];

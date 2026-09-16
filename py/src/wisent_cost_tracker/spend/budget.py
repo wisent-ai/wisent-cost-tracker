@@ -5,7 +5,7 @@ import math
 from typing import List, Optional
 
 from .sinks import CostSink, SupabaseSink
-from .types import BudgetDecision, BudgetPeriod, BudgetStatus, CostRecord
+from ..types import BudgetDecision, BudgetPeriod, BudgetStatus, CostRecord
 
 
 class BudgetManager:

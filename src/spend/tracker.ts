@@ -1,6 +1,6 @@
-import type { CostRecord, CostSink, UsageType } from './types.js';
+import type { CostRecord, CostSink, UsageType } from '../types.js';
 import { MemorySink, FileSink, SupabaseSink, type SupabaseSinkOptions } from './sinks.js';
-import { captchaPrice, smsPrice, proxyCostForBytes, llmCost, computeCost, PRICES } from './pricing.js';
+import { captchaPrice, smsPrice, proxyCostForBytes, llmCost, computeCost, PRICES } from '../pricing.js';
 
 export interface CostTrackerOptions {
   agent_id: string;

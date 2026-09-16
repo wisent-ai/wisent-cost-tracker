@@ -2,3 +2,10 @@
 # from .github/banner.toml and replaced whole on every run, so a repository
 # audit reads it as generated output instead of asking somebody to split it.
 assets/readme-banner.svg
+# The repository root. Every file there is read by a tool at exactly that path:
+# npm reads package.json and package-lock.json, TypeScript reads tsconfig.json,
+# the two release checks read released-surface.npm.json and
+# released-surface.pypi.json, GitHub reads README.md and LICENSE. This package
+# ships twice, once to npm from src/ and once to PyPI from py/, which is why
+# there are two of several things.
+.

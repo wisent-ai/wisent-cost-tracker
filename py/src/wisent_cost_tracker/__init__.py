@@ -3,8 +3,8 @@
 Public API mirrors @wisent/cost-tracker (npm).
 """
 
-from .tracker import CostTracker, CostTrackerOptions
-from .budget import BudgetManager
+from .spend.tracker import CostTracker, CostTrackerOptions
+from .spend.budget import BudgetManager
 from .pricing import (
     PRICES,
     captcha_price,
@@ -14,7 +14,7 @@ from .pricing import (
     compute_cost,
     load_pricing,
 )
-from .sinks import MemorySink, FileSink, SupabaseSink
+from .spend.sinks import MemorySink, FileSink, SupabaseSink
 from .types import BudgetDecision, BudgetPeriod, BudgetStatus, CostRecord
 from .onboarding import (
     FIRST_SUCCESS_FACT,

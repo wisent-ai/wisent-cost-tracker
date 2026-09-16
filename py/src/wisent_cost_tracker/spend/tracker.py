@@ -7,7 +7,7 @@ import signal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .pricing import (
+from ..pricing import (
     captcha_price,
     compute_cost,
     llm_cost,
@@ -16,7 +16,7 @@ from .pricing import (
     PRICES,
 )
 from .sinks import CostSink, FileSink, MemorySink, SupabaseSink
-from .types import CostRecord
+from ..types import CostRecord
 
 _USAGE_TYPES = {"solves", "tokens", "bytes", "seconds", "units", "emails"}
 
