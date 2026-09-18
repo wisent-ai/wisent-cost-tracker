@@ -11,6 +11,14 @@ from typing import Any, Dict
 
 _cached: Dict[str, Any] | None = None
 
+# The units the table prices in, and the last-resort unit prices used when a
+# service is missing from the table altogether.
+_BYTES_PER_GIB = 1024 * 1024 * 1024
+_TOKENS_PER_PRICED_BLOCK = 1000
+_SECONDS_PER_HOUR = 3600
+_CAPTCHA_LAST_RESORT_USD = 0.001
+_SMS_LAST_RESORT_USD = 0.30
+
 
 def _resolve_pricing_path() -> Path:
     here = Path(__file__).resolve().parent
@@ -38,18 +46,18 @@ PRICES: Dict[str, Any] = load_pricing()
 
 def captcha_price(service: str, task_type: str) -> float:
     tbl = PRICES["captcha"].get(service, {})
-    return tbl.get(task_type, tbl.get("default", 0.001))
+    return tbl.get(task_type, tbl.get("default", _CAPTCHA_LAST_RESORT_USD))
 
 
 def sms_price(service: str, platform: str) -> float:
     tbl = PRICES["sms"].get(service, {})
-    return tbl.get(platform.lower(), tbl.get("default", 0.30))
+    return tbl.get(platform.lower(), tbl.get("default", _SMS_LAST_RESORT_USD))
 
 
 def proxy_cost_for_bytes(provider: str, num_bytes: int, is_mobile: bool = False) -> float:
     key = "oxylabs_mobile" if (is_mobile and provider == "oxylabs") else provider
     per_gb = PRICES["proxy_per_gb"].get(key, PRICES["proxy_per_gb"]["default"])
-    return (num_bytes / (1024 * 1024 * 1024)) * per_gb
+    return (num_bytes / _BYTES_PER_GIB) * per_gb
 
 
 def llm_cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -59,9 +67,9 @@ def llm_cost(model: str, input_tokens: int, output_tokens: int) -> float:
         if key != "default" and key.lower() in ml:
             prices = value
             break
-    return (input_tokens / 1000) * prices["input_per_1k"] + (output_tokens / 1000) * prices["output_per_1k"]
+    return (input_tokens / _TOKENS_PER_PRICED_BLOCK) * prices["input_per_1k"] + (output_tokens / _TOKENS_PER_PRICED_BLOCK) * prices["output_per_1k"]
 
 
 def compute_cost(instance_type: str, seconds: float) -> float:
     per_hour = PRICES["compute_per_hour"].get(instance_type, PRICES["compute_per_hour"]["default"])
-    return (seconds / 3600) * per_hour
+    return (seconds / _SECONDS_PER_HOUR) * per_hour

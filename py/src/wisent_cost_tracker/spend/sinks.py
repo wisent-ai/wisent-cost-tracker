@@ -7,6 +7,12 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from ..types import BudgetPeriod, BudgetStatus, CostRecord
 
+# Utilization is reported as a percentage of the allocation.
+_PERCENT = 100
+# One Supabase REST call gets fifteen seconds; any 4xx or 5xx answer is a failure.
+_SUPABASE_TIMEOUT_SECONDS = 15
+_FIRST_FAILURE_STATUS = 400
+
 
 class CostSink(Protocol):
     def write(self, records: List[CostRecord]) -> None: ...
@@ -63,7 +69,7 @@ class MemorySink:
                     allocated_usd=allocated,
                     spent_usd=spent,
                     remaining_usd=remaining,
-                    utilization_pct=(spent / allocated * 100) if allocated > 0 else 0,
+                    utilization_pct=(spent / allocated * _PERCENT) if allocated > 0 else 0,
                     is_over_budget=spent > allocated,
                     period=period,
                     starts_at=starts_at.isoformat(),
@@ -154,9 +160,9 @@ class SupabaseSink:
             f"{self.url}/rest/v1/{self.table}",
             headers=self._headers(),
             content=json.dumps(body),
-            timeout=15,
+            timeout=_SUPABASE_TIMEOUT_SECONDS,
         )
-        if r.status_code >= 400:
+        if r.status_code >= _FIRST_FAILURE_STATUS:
             raise RuntimeError(f"SupabaseSink write failed: {r.status_code} {r.text[:200]}")
 
     def read(self, agent_id: str, since: datetime) -> List[CostRecord]:
@@ -167,16 +173,16 @@ class SupabaseSink:
             f"&created_at=gte.{since.isoformat()}"
             f"&select=*"
         )
-        r = httpx.get(url, headers=self._headers("return=representation"), timeout=15)
-        if r.status_code >= 400:
+        r = httpx.get(url, headers=self._headers("return=representation"), timeout=_SUPABASE_TIMEOUT_SECONDS)
+        if r.status_code >= _FIRST_FAILURE_STATUS:
             raise RuntimeError(f"SupabaseSink read failed: {r.status_code}")
         return [CostRecord(**row) for row in r.json()]
 
     def read_budgets(self, agent_id: str) -> List[BudgetStatus]:
         import httpx
         url = f"{self.url}/rest/v1/{self.view_name}?agent_id=eq.{agent_id}&select=*"
-        r = httpx.get(url, headers=self._headers("return=representation"), timeout=15)
-        if r.status_code >= 400:
+        r = httpx.get(url, headers=self._headers("return=representation"), timeout=_SUPABASE_TIMEOUT_SECONDS)
+        if r.status_code >= _FIRST_FAILURE_STATUS:
             raise RuntimeError(f"SupabaseSink read_budgets failed: {r.status_code}")
         return [
             BudgetStatus(
@@ -212,7 +218,7 @@ class SupabaseSink:
                 "period": period,
                 "starts_at": starts_at.isoformat(),
             }),
-            timeout=15,
+            timeout=_SUPABASE_TIMEOUT_SECONDS,
         )
-        if r.status_code >= 400:
+        if r.status_code >= _FIRST_FAILURE_STATUS:
             raise RuntimeError(f"SupabaseSink write_budget failed: {r.status_code} {r.text[:200]}")

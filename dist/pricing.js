@@ -14,6 +14,13 @@ exports.llmCost = llmCost;
 exports.computeCost = computeCost;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
+// The units the table prices in, and the last-resort unit prices used when a
+// service is missing from the table altogether.
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
+const TOKENS_PER_PRICED_BLOCK = 1000;
+const SECONDS_PER_HOUR = 3600;
+const CAPTCHA_LAST_RESORT_USD = 0.001;
+const SMS_LAST_RESORT_USD = 0.30;
 let cached = null;
 /** Resolve the canonical pricing JSON path. Build copies the file under
  *  `dist/pricing/costs.json`; in-source dev resolves up to `../../pricing/`. */
@@ -39,19 +46,19 @@ exports.PRICES = loadPricing();
 /** Look up captcha unit price. Falls back through service.default → 0.001. */
 function captchaPrice(service, taskType) {
     const tbl = exports.PRICES.captcha[service];
-    return tbl?.[taskType] ?? tbl?.default ?? 0.001;
+    return tbl?.[taskType] ?? tbl?.default ?? CAPTCHA_LAST_RESORT_USD;
 }
 /** Look up SMS unit price. service is the SMS provider, platform is the
  *  target service ('reddit', 'twitter', etc). */
 function smsPrice(service, platform) {
     const tbl = exports.PRICES.sms[service];
-    return tbl?.[platform.toLowerCase()] ?? tbl?.default ?? 0.30;
+    return tbl?.[platform.toLowerCase()] ?? tbl?.default ?? SMS_LAST_RESORT_USD;
 }
 /** Compute per-GB proxy egress cost. provider matches table keys. */
 function proxyCostForBytes(provider, bytes, isMobile = false) {
     const key = isMobile && provider === 'oxylabs' ? 'oxylabs_mobile' : provider;
     const perGb = exports.PRICES.proxy_per_gb[key] ?? exports.PRICES.proxy_per_gb.default;
-    return (bytes / (1024 * 1024 * 1024)) * perGb;
+    return (bytes / BYTES_PER_GIB) * perGb;
 }
 /** Estimate LLM cost from token counts. Matches the model name as a substring
  *  so 'claude-3-5-sonnet@20240620' resolves to 'claude-3-5-sonnet'. */
@@ -64,12 +71,12 @@ function llmCost(model, inputTokens, outputTokens) {
             break;
         }
     }
-    return (inputTokens / 1000) * prices.input_per_1k + (outputTokens / 1000) * prices.output_per_1k;
+    return (inputTokens / TOKENS_PER_PRICED_BLOCK) * prices.input_per_1k + (outputTokens / TOKENS_PER_PRICED_BLOCK) * prices.output_per_1k;
 }
 /** Compute per-second compute cost. instanceType matches keys like
  *  'gcp_n2-standard-4' or 'runpod_a100_80gb'. */
 function computeCost(instanceType, seconds) {
     const perHour = exports.PRICES.compute_per_hour[instanceType] ?? exports.PRICES.compute_per_hour.default;
-    return (seconds / 3600) * perHour;
+    return (seconds / SECONDS_PER_HOUR) * perHour;
 }
 //# sourceMappingURL=pricing.js.map

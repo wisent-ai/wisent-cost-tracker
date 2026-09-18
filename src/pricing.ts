@@ -19,6 +19,14 @@ export interface PricingTable {
   email: Record<string, number>;
 }
 
+// The units the table prices in, and the last-resort unit prices used when a
+// service is missing from the table altogether.
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
+const TOKENS_PER_PRICED_BLOCK = 1000;
+const SECONDS_PER_HOUR = 3600;
+const CAPTCHA_LAST_RESORT_USD = 0.001;
+const SMS_LAST_RESORT_USD = 0.30;
+
 let cached: PricingTable | null = null;
 
 /** Resolve the canonical pricing JSON path. Build copies the file under
@@ -43,21 +51,21 @@ export const PRICES = loadPricing();
 /** Look up captcha unit price. Falls back through service.default → 0.001. */
 export function captchaPrice(service: string, taskType: string): number {
   const tbl = PRICES.captcha[service];
-  return tbl?.[taskType] ?? tbl?.default ?? 0.001;
+  return tbl?.[taskType] ?? tbl?.default ?? CAPTCHA_LAST_RESORT_USD;
 }
 
 /** Look up SMS unit price. service is the SMS provider, platform is the
  *  target service ('reddit', 'twitter', etc). */
 export function smsPrice(service: string, platform: string): number {
   const tbl = PRICES.sms[service];
-  return tbl?.[platform.toLowerCase()] ?? tbl?.default ?? 0.30;
+  return tbl?.[platform.toLowerCase()] ?? tbl?.default ?? SMS_LAST_RESORT_USD;
 }
 
 /** Compute per-GB proxy egress cost. provider matches table keys. */
 export function proxyCostForBytes(provider: string, bytes: number, isMobile = false): number {
   const key = isMobile && provider === 'oxylabs' ? 'oxylabs_mobile' : provider;
   const perGb = PRICES.proxy_per_gb[key] ?? PRICES.proxy_per_gb.default;
-  return (bytes / (1024 * 1024 * 1024)) * perGb;
+  return (bytes / BYTES_PER_GIB) * perGb;
 }
 
 /** Estimate LLM cost from token counts. Matches the model name as a substring
@@ -68,12 +76,12 @@ export function llmCost(model: string, inputTokens: number, outputTokens: number
   for (const [k, v] of Object.entries(PRICES.llm)) {
     if (k !== 'default' && ml.includes(k.toLowerCase())) { prices = v; break; }
   }
-  return (inputTokens / 1000) * prices.input_per_1k + (outputTokens / 1000) * prices.output_per_1k;
+  return (inputTokens / TOKENS_PER_PRICED_BLOCK) * prices.input_per_1k + (outputTokens / TOKENS_PER_PRICED_BLOCK) * prices.output_per_1k;
 }
 
 /** Compute per-second compute cost. instanceType matches keys like
  *  'gcp_n2-standard-4' or 'runpod_a100_80gb'. */
 export function computeCost(instanceType: string, seconds: number): number {
   const perHour = PRICES.compute_per_hour[instanceType] ?? PRICES.compute_per_hour.default;
-  return (seconds / 3600) * perHour;
+  return (seconds / SECONDS_PER_HOUR) * perHour;
 }

@@ -20,6 +20,8 @@ from .sinks import CostSink, FileSink, MemorySink, SupabaseSink
 from ..types import CostRecord
 
 _USAGE_TYPES = {"solves", "tokens", "bytes", "seconds", "units", "emails"}
+# Costs are recorded to a hundredth of a cent.
+_COST_DECIMALS = 4
 
 
 @dataclass
@@ -34,7 +36,7 @@ class CostTrackerOptions:
 
 
 def _round4(n: float) -> float:
-    return round(n, 4)
+    return round(n, _COST_DECIMALS)
 
 
 def _normalize_llm_service(model: str) -> str:
