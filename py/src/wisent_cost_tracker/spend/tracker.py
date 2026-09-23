@@ -23,6 +23,8 @@ _USAGE_TYPES = {"solves", "tokens", "bytes", "seconds", "units", "emails"}
 # Costs are recorded to a hundredth of a cent.
 _COST_DECIMALS = 4
 
+_USAGE_TYPES = {"solves", "tokens", "bytes", "seconds", "units", "emails"}
+
 
 @dataclass
 class CostTrackerOptions:
