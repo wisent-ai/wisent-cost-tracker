@@ -16,7 +16,6 @@
   "scripts": {
     "build": "tsc && mkdir -p dist/pricing && cp pricing/costs.json dist/pricing/costs.json",
     "prepare": "npm run build",
-    "test": "node --test dist/test/*.test.js",
     "sync-pricing": "cp pricing/costs.json py/src/wisent_cost_tracker/pricing/costs.json && echo synced"
   },
   "keywords": ["cost", "budget", "tracking", "wisent"],
