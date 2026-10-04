@@ -35,11 +35,15 @@ export class CostTracker {
     if (opts.autoFlush !== false) this.installExitHooks();
   }
 
+  // A signal exits only after the sink has answered the flush, however long
+  // that takes; a failed flush is reported on stderr, never swallowed.
   private installExitHooks(): void {
-    const flush = () => { void this.flush().catch(() => {}); };
-    process.on('beforeExit', flush);
-    process.on('SIGINT', () => { flush(); setTimeout(() => process.exit(130), 100); });
-    process.on('SIGTERM', () => { flush(); setTimeout(() => process.exit(143), 100); });
+    const flush = () => this.flush().catch((error) => {
+      console.error(`CostTracker: flushing spend records failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    process.on('beforeExit', () => { void flush(); });
+    process.on('SIGINT', () => { void flush().finally(() => process.exit(130)); });
+    process.on('SIGTERM', () => { void flush().finally(() => process.exit(143)); });
   }
 
   /** Append a raw record. Computes cost from pricing if cost_usd absent. */
@@ -50,7 +54,7 @@ export class CostTracker {
       resource: rec.resource,
       usage_type: rec.usage_type,
       usage_amount: rec.usage_amount,
-      cost_usd: round4(cost_usd),
+      cost_usd,
       reference_id: rec.reference_id ?? this.reference_id,
       metadata: rec.metadata ?? {},
       created_at: rec.created_at ?? new Date().toISOString(),
@@ -123,12 +127,12 @@ export class CostTracker {
   }
 
   /** Total $ across all buffered records. */
-  total(): number { return round4(this.buffer.reduce((a, r) => a + r.cost_usd, 0)); }
+  total(): number { return this.buffer.reduce((a, r) => a + r.cost_usd, 0); }
 
   /** Per-service cost rollup compatible with weles' service_costs JSONB. */
   snapshot(): { cost_usd: number; service_costs: Record<string, number>; records: CostRecord[] } {
     const service_costs: Record<string, number> = {};
-    for (const r of this.buffer) service_costs[r.service] = round4((service_costs[r.service] ?? 0) + r.cost_usd);
+    for (const r of this.buffer) service_costs[r.service] = (service_costs[r.service] ?? 0) + r.cost_usd;
     return { cost_usd: this.total(), service_costs, records: this.buffer.slice() };
   }
 
@@ -146,7 +150,6 @@ export class CostTracker {
   getSink(): CostSink { return this.sink; }
 }
 
-function round4(n: number): number { return Math.round(n * 10000) / 10000; }
 
 function normalizeLlmService(model: string): string {
   const m = model.toLowerCase();
