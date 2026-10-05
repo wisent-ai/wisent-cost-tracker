@@ -9,3 +9,11 @@ __pycache__/
 data/
 recordings/
 .DS_Store
+.build/
+dist/
+py/build/
+py/dist/
+target/
+*.so
+*.dylib
+*.pyd

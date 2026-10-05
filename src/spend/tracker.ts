@@ -18,7 +18,8 @@ export class CostTracker {
   private buffer: CostRecord[] = [];
   private agent_id: string;
   private reference_id?: string;
-  private flushed = false;
+  private accepted = 0;
+  private flushing: Promise<void> | undefined;
 
   constructor(opts: CostTrackerOptions) {
     this.agent_id = opts.agent_id;
@@ -136,14 +137,30 @@ export class CostTracker {
     return { cost_usd: this.total(), service_costs, records: this.buffer.slice() };
   }
 
-  /** Flush buffered records to the sink. Idempotent — safe to call multiple
-   *  times; second call is a no-op. */
+  /** Publish every record present at this call, without resending accepted
+   *  records. Concurrent callers share the current write before their tail. */
   async flush(): Promise<void> {
-    if (this.flushed) return;
-    if (this.buffer.length === 0) { this.flushed = true; return; }
-    const stamped = this.buffer.map(r => ({ ...r, agent_id: this.agent_id }));
-    await this.sink.write(stamped as CostRecord[]);
-    this.flushed = true;
+    const end = this.buffer.length;
+    while (this.accepted < end) {
+      if (this.flushing) {
+        await this.flushing;
+        continue;
+      }
+      const start = this.accepted;
+      const stamped = new Array<CostRecord>(end - start);
+      for (let index = start; index < end; index += 1) {
+        stamped[index - start] = { ...this.buffer[index]!, agent_id: this.agent_id };
+      }
+      const writing = Promise.resolve()
+        .then(() => this.sink.write(stamped))
+        .then(() => { this.accepted = end; });
+      this.flushing = writing;
+      try {
+        await writing;
+      } finally {
+        if (this.flushing === writing) this.flushing = undefined;
+      }
+    }
   }
 
   /** Underlying sink, for advanced usage (e.g. read-back during the same run). */

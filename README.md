@@ -192,3 +192,94 @@ page snapshots. When the provider returns an actual billed amount, pass it as
 the helper's override argument or as `cost_usd` to `record`. TypeScript helpers
 take a positional `override`; Python helpers that accept one name it `override`,
 not `override_usd`.
+
+## Runtime and delivery behavior
+
+The TypeScript package requires Node 22 or later. `npm ci` runs the package's
+`prepare` build; `dist/` is generated output, not a second tracked implementation.
+Python requires CPython 3.11 or later. Both native extension manifests use the
+committed `py/Cargo.lock` through setuptools-rust's `--locked` manifest option.
+
+Both HTTP implementations read the entire response without setting a request
+deadline. The Python implementation uses HTTPX's public request and transport
+interfaces; the Node implementation uses `node:http` and `node:https`.
+These choices do not remove failures imposed by the operating system, network
+or server. No automatic retry changes an ambiguous write into a second charge.
+
+For HTTP failures, Python exceptions expose `operation`, `method`, `url`,
+`status_code` and `response_body`. TypeScript exports `SupabaseRequestError`
+with `operation`, `method`, `url`, `statusCode`, `responseBody` and `cause`.
+Connection failures have no HTTP status. Inspect the full cause and body rather
+than treating a running process or a configured endpoint as successful delivery.
+
+File sinks replace their JSON document atomically and refuse malformed existing
+JSON instead of resetting it. They are single-writer sinks: separate trackers
+writing the same file concurrently are not a shared append log.
+
+## First use and central onboarding
+
+The installed command `wisent-cost-tracker-onboarding` accepts `show`, `status`,
+`skip`, `abandon`, `reset` and `run`. `status` does not start a fresh attempt.
+`run` records real local usage, writes a budget and takes a budget decision.
+It does not make a paid provider call. The command emits a JSON envelope and
+exits 0 on success, 1 on an operation failure or 2 for an unknown action.
+
+Set `WISENT_COST_TRACKER_ONBOARDING_STATE_PATH` to isolate an application's
+state. The central service is **wisent-integrations**, which forwards onboarding
+operations to Echo. The shipped environment names remain
+`STADO_INTEGRATION_API_URL` and `WISENT_COST_TRACKER_STADO_INTEGRATION_TOKEN`;
+they mean that service's HTTPS origin and client bearer, not the Stado fleet API.
+An origin containing credentials, a path, a query or a fragment is refused.
+Requests use `/api/integration/onboarding/wisent-cost-tracker.<operation>`.
+
+Offline completion is local completion, not central acknowledgement. Events
+stay in the persisted queue until the service accepts them. Failures report
+the operation and cause on stderr; a new command attempts delivery again.
+Previously queued events are migrated to the current service schema before
+delivery while retaining their event IDs and evidence. A successful local
+`run` alone does not prove that Echo received its events.
+
+This SDK has no standalone graphical application. Applications use the same
+public library methods to display spend, budget status and failures; CLI state
+is not a separate spend backend.
+
+## Real qualification
+
+`tests/spend/` contains a reusable Rust driver and installed-package Node
+journeys. Running it builds fresh Python wheels and the npm archive, installs
+them into an isolated run directory and exercises their actual public APIs.
+It requires Rust, a CPython development installation, pip, Node 22+, npm and
+network access to the declared real services. Compilation alone is not a pass.
+
+Provide a JSON fixture under the checkout's ignored `.build/` directory with
+`supabase.url`, `supabase.key_env`, `supabase.pagination_records`,
+`supabase.pagination_budgets`, `onboarding.url` and `onboarding.token_env`.
+The `*_env` fields name existing credential environment variables, not tokens.
+The Supabase fixture must have the reference schema and allow isolated agent
+rows to be created, read, updated and deleted. The onboarding fixture must
+serve the published journey through wisent-integrations and Echo.
+Choose dataset counts greater than the provider's actual page size. A run that
+does not cross both real page boundaries refuses qualification.
+
+From a clean, committed checkout, with `PYO3_PYTHON` naming that CPython:
+
+```sh
+cargo run --locked --manifest-path tests/spend/Cargo.toml -- \
+  run --fixture .build/spend-fixture.json --python "$PYO3_PYTHON"
+cargo run --locked --manifest-path tests/spend/Cargo.toml -- \
+  status --run-dir .build/spend/<run-id>
+cargo run --locked --manifest-path tests/spend/Cargo.toml -- \
+  cleanup --run-dir .build/spend/<run-id>
+```
+
+The driver retains the exact revision, package hashes, commands, exit statuses,
+stdout, stderr, full HTTP observations and final state under `.build/spend/`.
+It covers small costs, later and concurrent flushes, corrupt files, priced
+helpers, native garbage collection, actual interpreter exit and signals, real
+Supabase pagination and budget edits, authentication failures, complete provider
+errors, offline event migration and centrally persisted first use.
+Cleanup verifies ownership before deleting qualification rows and confirms
+their absence. It also runs after failures; `cleanup` can recover an interrupted
+run. Echo attempts remain as central audit evidence.
+Missing credentials, refused operations or incomplete cleanup never produce a
+passing summary. Test sources and a source revision are not a recorded run.

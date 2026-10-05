@@ -6,6 +6,7 @@ export {
   type PricingTable,
 } from './pricing.js';
 export { MemorySink, FileSink, SupabaseSink, type SupabaseSinkOptions } from './spend/sinks.js';
+export { SupabaseRequestError } from './spend/http.js';
 export type {
   CostRecord, CostSink, UsageType,
   BudgetSnapshot, BudgetStatus, BudgetPeriod,

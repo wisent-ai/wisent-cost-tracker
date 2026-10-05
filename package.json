@@ -1,7 +1,8 @@
 {
   "name": "@wisent/cost-tracker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Per-agent cost tracking and budget enforcement (TS client).",
+  "engines": { "node": ">=22" },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

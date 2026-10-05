@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "setuptools-rust>=1.11"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "wisent-cost-tracker"
-version = "0.1.0"
+version = "0.1.1"
 description = "Per-agent cost tracking and budget enforcement (Python client)."
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
@@ -21,3 +21,15 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 wisent_cost_tracker = ["pricing/*.json"]
+
+[[tool.setuptools-rust.ext-modules]]
+target = "wisent_cost_tracker.spend"
+path = "Cargo.toml"
+binding = "PyO3"
+cargo_manifest_args = ["--locked"]
+
+[[tool.setuptools-rust.ext-modules]]
+target = "wisent_cost_tracker.onboarding.engine.control_plane"
+path = "control-plane/Cargo.toml"
+binding = "PyO3"
+cargo_manifest_args = ["--locked"]

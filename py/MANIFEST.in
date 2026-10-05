@@ -1,0 +1,4 @@
+include Cargo.toml Cargo.lock
+recursive-include native *.rs
+recursive-include control-plane *.rs *.toml
+recursive-include src/wisent_cost_tracker/pricing *.json
