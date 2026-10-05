@@ -19,15 +19,31 @@ const input = (marker, amount) => ({
 });
 
 const memory = new CostTracker({ agent_id: agent, sink: 'memory', autoFlush: false });
+const missingAmount = input('missing-amount', undefined);
+delete missingAmount.cost_usd;
+for (const record of [
+  missingAmount,
+  input('not-a-number', NaN),
+  input('infinite-amount', Infinity),
+  input('string-amount', '0'),
+  input('null-amount', null),
+]) {
+  assert.throws(() => memory.record(record), error =>
+    error instanceof TypeError && error.message.includes('cost_usd'));
+}
+assert.deepEqual(memory.snapshot().records, [], 'a rejected record must not enter the buffer');
+await memory.flush();
+assert.deepEqual(await memory.getSink().read(), [], 'a refused amount must not become a free charge');
 assert.equal(memory.record(input('first', cost)).cost_usd, cost);
 const first = memory.flush();
 memory.record(input('second', 2 * cost));
 const second = memory.flush();
 await Promise.all([first, second]);
+memory.record(input('explicit-free', 0));
 await memory.flush();
 const memoryRows = await memory.getSink().read();
 assert.deepEqual(memoryRows.map(row => [row.reference_id, row.cost_usd, row.agent_id]), [
-  ['first', cost, agent], ['second', 2 * cost, agent],
+  ['first', cost, agent], ['second', 2 * cost, agent], ['explicit-free', 0, agent],
 ]);
 assert.equal(memory.total(), 3 * cost);
 assert.equal(memory.snapshot().service_costs.qualification_usage, 3 * cost);

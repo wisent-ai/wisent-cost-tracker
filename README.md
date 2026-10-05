@@ -193,6 +193,13 @@ the helper's override argument or as `cost_usd` to `record`. TypeScript helpers
 take a positional `override`; Python helpers that accept one name it `override`,
 not `override_usd`.
 
+TypeScript `CostTracker.record` requires `cost_usd` in its input type and
+refuses missing, non-numeric or non-finite amounts with `TypeError`, before
+buffering anything. It does not infer a price or substitute zero for an
+unknown amount. An explicitly supplied `0` is valid for a known free charge.
+Use the relevant pricing helper for an estimate, or pass the provider's
+actual billed amount.
+
 ## Runtime and delivery behavior
 
 The TypeScript package requires Node 22 or later. `npm ci` runs the package's
@@ -274,8 +281,9 @@ cargo run --locked --manifest-path tests/spend/Cargo.toml -- \
 
 The driver retains the exact revision, package hashes, commands, exit statuses,
 stdout, stderr, full HTTP observations and final state under `.build/spend/`.
-It covers small costs, later and concurrent flushes, corrupt files, priced
-helpers, native garbage collection, actual interpreter exit and signals, real
+It covers small costs, explicit free charges, refusal of missing and invalid
+raw amounts without buffered or persisted records, later and concurrent flushes,
+corrupt files, priced helpers, native garbage collection, actual interpreter exit and signals, real
 Supabase pagination and budget edits, authentication failures, complete provider
 errors, offline event migration and centrally persisted first use.
 Cleanup verifies ownership before deleting qualification rows and confirms

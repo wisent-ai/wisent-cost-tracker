@@ -47,9 +47,12 @@ export class CostTracker {
     process.on('SIGTERM', () => { void flush().finally(() => process.exit(143)); });
   }
 
-  /** Append a raw record. Computes cost from pricing if cost_usd absent. */
-  record(rec: Omit<CostRecord, 'cost_usd'> & { cost_usd?: number }): CostRecord {
-    const cost_usd = typeof rec.cost_usd === 'number' ? rec.cost_usd : 0;
+  /** Append a raw record with an explicitly supplied, finite amount. */
+  record(rec: CostRecord): CostRecord {
+    const cost_usd = rec.cost_usd;
+    if (typeof cost_usd !== 'number' || !Number.isFinite(cost_usd)) {
+      throw new TypeError('CostTracker.record: cost_usd must be an explicit finite number; use a pricing helper when the amount is unknown');
+    }
     const full: CostRecord = {
       service: rec.service,
       resource: rec.resource,
