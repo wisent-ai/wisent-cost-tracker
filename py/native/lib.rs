@@ -1,5 +1,6 @@
 mod bridge;
 mod budget;
+mod pricing;
 mod sinks;
 mod tracker;
 mod transport;
@@ -13,6 +14,10 @@ fn spend(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__path__", PyList::empty(py))?;
     module.setattr("__name__", "wisent_cost_tracker.spend")?;
     let modules = py.import("sys")?.getattr("modules")?;
+    let pricing = PyModule::new(py, "wisent_cost_tracker.pricing")?;
+    pricing::register(&pricing)?;
+    modules.set_item("wisent_cost_tracker.pricing", &pricing)?;
+    py.import("wisent_cost_tracker")?.setattr("pricing", pricing)?;
     let sinks = PyModule::new(py, "wisent_cost_tracker.spend.sinks")?;
     sinks::register(&sinks)?;
     let budget = PyModule::new(py, "wisent_cost_tracker.spend.budget")?;
@@ -24,11 +29,25 @@ fn spend(module: &Bound<'_, PyModule>) -> PyResult<()> {
         modules.set_item(format!("wisent_cost_tracker.spend.{name}"), child)?;
     }
     for (name, owner) in [
-        ("BudgetManager", &budget), ("CostTracker", &tracker), ("CostTrackerOptions", &tracker),
-        ("FileSink", &sinks), ("MemorySink", &sinks), ("SupabaseSink", &sinks),
+        ("BudgetManager", &budget),
+        ("CostTracker", &tracker),
+        ("CostTrackerOptions", &tracker),
+        ("FileSink", &sinks),
+        ("MemorySink", &sinks),
+        ("SupabaseSink", &sinks),
     ] {
         module.add(name, owner.getattr(name)?)?;
     }
-    module.add("__all__", ["BudgetManager", "CostTracker", "CostTrackerOptions", "FileSink", "MemorySink", "SupabaseSink"])?;
+    module.add(
+        "__all__",
+        [
+            "BudgetManager",
+            "CostTracker",
+            "CostTrackerOptions",
+            "FileSink",
+            "MemorySink",
+            "SupabaseSink",
+        ],
+    )?;
     Ok(())
 }

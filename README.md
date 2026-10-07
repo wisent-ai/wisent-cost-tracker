@@ -119,8 +119,9 @@ recording usage does not itself prevent a provider from charging.
 `wisent_cost_tracker.spend` from `py/native/`, and
 `wisent_cost_tracker.onboarding.engine.control_plane` from `py/control-plane/`.
 The public Python imports remain available; this is not a standalone Rust CLI.
-Pricing, record types and parts of onboarding still have Python source, so the
-presence of the native modules does not mean the whole package has moved to Rust.
+The spend extension also registers the public `wisent_cost_tracker.pricing` module.
+Record types and parts of onboarding still have Python source; the whole package
+has not moved to Rust. No Python pricing or control-plane fallback is shipped.
 
 Building the package requires Rust, Cargo and the Python build requirements
 declared in that manifest. From the repository root:
@@ -193,12 +194,18 @@ the helper's override argument or as `cost_usd` to `record`. TypeScript helpers
 take a positional `override`; Python helpers that accept one name it `override`,
 not `override_usd`.
 
-TypeScript `CostTracker.record` requires `cost_usd` in its input type and
-refuses missing, non-numeric or non-finite amounts with `TypeError`, before
-buffering anything. It does not infer a price or substitute zero for an
-unknown amount. An explicitly supplied `0` is valid for a known free charge.
-Use the relevant pricing helper for an estimate, or pass the provider's
-actual billed amount.
+TypeScript `CostTracker.record` refuses missing, non-numeric or non-finite
+`cost_usd` with `TypeError` before buffering anything. It never substitutes zero
+for an unknown amount; explicit `0` means a known free charge. Use a pricing
+helper for an estimate, or pass the provider's actual billed amount.
+
+Captcha and SMS helpers use the resource price, then that provider's declared
+default. Without either, Python raises `ValueError` and TypeScript raises
+`RangeError`, naming the provider and resource. No record enters the buffer.
+Supply the helper's explicit override, including `0` for a known free charge.
+LLM pricing uses an exact model key, otherwise the longest matching key, then
+the table's declared default. Thus `gpt-4o-mini` and its dated variants use the
+mini rate rather than the shorter `gpt-4o` key.
 
 ## Runtime and delivery behavior
 
@@ -283,7 +290,7 @@ The driver retains the exact revision, package hashes, commands, exit statuses,
 stdout, stderr, full HTTP observations and final state under `.build/spend/`.
 It covers small costs, explicit free charges, refusal of missing and invalid
 raw amounts without buffered or persisted records, later and concurrent flushes,
-corrupt files, priced helpers, native garbage collection, actual interpreter exit and signals, real
+corrupt files, exact and variant model prices, unknown-price refusals, native garbage collection, interpreter exit and signals, real
 Supabase pagination and budget edits, authentication failures, complete provider
 errors, offline event migration and centrally persisted first use.
 Cleanup verifies ownership before deleting qualification rows and confirms

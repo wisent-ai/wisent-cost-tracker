@@ -19,13 +19,10 @@ export interface PricingTable {
   email: Record<string, number>;
 }
 
-// The units the table prices in, and the last-resort unit prices used when a
-// service is missing from the table altogether.
+// Unit conversions for the canonical pricing table.
 const BYTES_PER_GIB = 1024 * 1024 * 1024;
 const TOKENS_PER_PRICED_BLOCK = 1000;
 const SECONDS_PER_HOUR = 3600;
-const CAPTCHA_LAST_RESORT_USD = 0.001;
-const SMS_LAST_RESORT_USD = 0.30;
 
 let cached: PricingTable | null = null;
 
@@ -48,17 +45,25 @@ export function loadPricing(): PricingTable {
 
 export const PRICES = loadPricing();
 
-/** Look up captcha unit price. Falls back through service.default → 0.001. */
+/** Look up a declared captcha unit price, then the provider's declared default. */
 export function captchaPrice(service: string, taskType: string): number {
   const tbl = PRICES.captcha[service];
-  return tbl?.[taskType] ?? tbl?.default ?? CAPTCHA_LAST_RESORT_USD;
+  const price = tbl?.[taskType] ?? tbl?.default;
+  if (price === undefined) {
+    throw new RangeError(`No declared captcha price for service=${JSON.stringify(service)}, resource=${JSON.stringify(taskType)}; supply an explicit cost override`);
+  }
+  return price;
 }
 
 /** Look up SMS unit price. service is the SMS provider, platform is the
  *  target service ('reddit', 'twitter', etc). */
 export function smsPrice(service: string, platform: string): number {
   const tbl = PRICES.sms[service];
-  return tbl?.[platform.toLowerCase()] ?? tbl?.default ?? SMS_LAST_RESORT_USD;
+  const price = tbl?.[platform.toLowerCase()] ?? tbl?.default;
+  if (price === undefined) {
+    throw new RangeError(`No declared sms price for service=${JSON.stringify(service)}, resource=${JSON.stringify(platform.toLowerCase())}; supply an explicit cost override`);
+  }
+  return price;
 }
 
 /** Compute per-GB proxy egress cost. provider matches table keys. */
@@ -68,13 +73,20 @@ export function proxyCostForBytes(provider: string, bytes: number, isMobile = fa
   return (bytes / BYTES_PER_GIB) * perGb;
 }
 
-/** Estimate LLM cost from token counts. Matches the model name as a substring
- *  so 'claude-3-5-sonnet@20240620' resolves to 'claude-3-5-sonnet'. */
+/** Use an exact model key, otherwise the longest matching key, then the
+ *  declared default. Dated model variants keep their family's price. */
 export function llmCost(model: string, inputTokens: number, outputTokens: number): number {
   const ml = model.toLowerCase();
   let prices = PRICES.llm.default;
+  let matchLength = 0;
   for (const [k, v] of Object.entries(PRICES.llm)) {
-    if (k !== 'default' && ml.includes(k.toLowerCase())) { prices = v; break; }
+    if (k === 'default') continue;
+    const key = k.toLowerCase();
+    if (key === ml) { prices = v; break; }
+    if (key.length > matchLength && ml.includes(key)) {
+      prices = v;
+      matchLength = key.length;
+    }
   }
   return (inputTokens / TOKENS_PER_PRICED_BLOCK) * prices.input_per_1k + (outputTokens / TOKENS_PER_PRICED_BLOCK) * prices.output_per_1k;
 }

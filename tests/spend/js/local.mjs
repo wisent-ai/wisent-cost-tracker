@@ -77,7 +77,42 @@ assert.equal(refused.total(), cost);
 assert.throws(() => new CostTracker({ agent_id: agent, sink: 'supabase', autoFlush: false }), Error);
 assert.deepEqual(await tracker.getSink().read(), fileRows);
 
+const prices = JSON.parse(await readFile(new URL('../../../pricing/costs.json', import.meta.url), 'utf8'));
+const pricingPath = join(files, 'node-pricing.json');
+const priced = new CostTracker({ agent_id: agent, sink: 'file', filePath: pricingPath, autoFlush: false });
+const mini = prices.llm['gpt-4o-mini'];
+const miniCost = mini.input_per_1k / 2 + mini.output_per_1k / 4;
+priced.recordLlm('GPT-4O-MINI', 500, 250);
+priced.recordLlm('gpt-4o-mini-2024-07-18', 500, 250);
+priced.recordLlm('qualification-unpriced-model', 500, 250);
+priced.recordCaptcha('capsolver', 'qualification-unlisted-task');
+const expectedPrices = [
+  ['llm_openai', 'GPT-4O-MINI', miniCost],
+  ['llm_openai', 'gpt-4o-mini-2024-07-18', miniCost],
+  ['llm_other', 'qualification-unpriced-model', prices.llm.default.input_per_1k / 2 + prices.llm.default.output_per_1k / 4],
+  ['captcha_capsolver', 'qualification-unlisted-task', prices.captcha.capsolver.default],
+];
+const unpriced = `qualification_${randomUUID()}`;
+const pricingRefusals = [];
+for (const [method, service] of [['recordCaptcha', 'captcha'], ['recordSms', 'sms']]) {
+  const before = structuredClone(priced.snapshot());
+  assert.throws(() => priced[method](unpriced, 'qualification-resource'), error => {
+    assert.ok(error instanceof RangeError);
+    assert.ok(error.message.includes(unpriced) && error.message.includes('qualification-resource'));
+    pricingRefusals.push({ operation: method, error: error.message });
+    return true;
+  });
+  assert.deepEqual(priced.snapshot(), before, 'unpriced usage must not enter the buffer');
+  priced[method](unpriced, 'qualification-resource', 0);
+  expectedPrices.push([`${service}_${unpriced}`, 'qualification-resource', 0]);
+}
+await priced.flush();
+const pricedRows = JSON.parse(await readFile(pricingPath, 'utf8'));
+assert.deepEqual(pricedRows.map(row => [row.service, row.resource, row.cost_usd]), expectedPrices);
+assert.deepEqual(await priced.getSink().read(), pricedRows);
+
 console.log(JSON.stringify({
   entry, node: process.version, executable: process.execPath, memoryRecords: memoryRows,
   file: path, fileRecords: fileRows, snapshot: tracker.snapshot(), corruptFilePreserved: corruptPath,
+  pricingFile: pricingPath, pricedRecords: pricedRows, pricingRefusals,
 }));
