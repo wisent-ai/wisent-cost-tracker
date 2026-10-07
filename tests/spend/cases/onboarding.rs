@@ -93,7 +93,7 @@ pub fn run(run: &Run) -> Result<Value> {
         && status(&queued["progress"])? == Status::Completed
         && queued["evidence"]["budget_decision_observed"] == true,
         "actual tracker workflow did not complete first use: {offline}; {queued}");
-    ensure!(offline["usage"]["usage_amount"] == json!(fixture.usage_tokens)
+    ensure!(offline["usage"]["usage_amount"].as_f64() == Some(fixture.usage_tokens.get() as f64)
         && offline["usage"]["cost_usd"] == json!(fixture.cost_usd),
         "run did not record the caller's exact amounts: {offline}");
     let events = queued["pending_events"].as_array_mut().context("offline events were not persisted")?;
@@ -165,7 +165,7 @@ pub fn run(run: &Run) -> Result<Value> {
     let denied_state = state(run)?;
     ensure!(!allowed(&denied)? && denied_state["evidence"]["decision"] == "deny"
         && denied_state["evidence"]["cost_usd"] == json!(fixture.budget_usd)
-        && denied_state["evidence"]["usage_amount"] == json!(fixture.usage_tokens),
+        && denied_state["evidence"]["usage_amount"].as_f64() == Some(fixture.usage_tokens.get() as f64),
         "caller amounts did not produce a persisted over-budget decision: {denied}; {denied_state}");
     Ok(json!({"offline": offline, "migrated_central_attempt": migrated, "online": online,
         "central_attempt": central, "denied": denied, "state_failure": failure,
@@ -194,10 +194,12 @@ fn cli_contract(run: &Run) -> Result<()> {
     }
     let budget = run.fixture.onboarding.budget_usd.to_string();
     let tokens = run.fixture.onboarding.usage_tokens.to_string();
+    let cost = run.fixture.onboarding.cost_usd.to_string();
     for (label, arguments) in [
         ("onboarding-missing-amounts", vec!["run"]),
         ("onboarding-unexpected-amount", vec!["status", "--cost-usd", "NaN"]),
         ("onboarding-nonfinite-cost", vec!["run", "--budget-usd", &budget, "--usage-tokens", &tokens, "--cost-usd", "NaN"]),
+        ("onboarding-zero-tokens", vec!["run", "--budget-usd", &budget, "--usage-tokens", "0", "--cost-usd", &cost]),
         ("onboarding-conflicting-format", vec!["status", "--text", "--json"]),
     ] {
         let mut argv = vec![executable.clone()];

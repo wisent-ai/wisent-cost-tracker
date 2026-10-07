@@ -69,13 +69,13 @@ fn validate<'py>(
     for (name, value) in [("budget_usd", budget), ("usage_tokens", tokens), ("cost_usd", cost)] {
         match (action, value) {
             (Action::Run, Some(value)) => {
-                crate::bridge::numeric(py, value, name, false)
+                crate::bridge::numeric(py, value, name, name == "usage_tokens")
                     .map_err(|cause| invalid(py, "invalid_amount", cause.to_string()))?;
                 if name == "usage_tokens" && !value.get_type().is(&py.get_type::<PyInt>()) {
                     return Err(invalid(
                         py,
                         "invalid_amount",
-                        "usage_tokens must be a non-negative whole number",
+                        "usage_tokens must be a positive whole number",
                     ));
                 }
             }

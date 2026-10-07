@@ -55,7 +55,7 @@ fn parser(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         (
             "--usage-tokens",
             "int",
-            "Required for run: non-negative whole token count",
+            "Required for run: positive whole token count",
         ),
         (
             "--cost-usd",

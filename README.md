@@ -237,12 +237,12 @@ writing the same file concurrently are not a shared append log.
 same result as field/value lines. The two output flags are mutually exclusive.
 `run` requires explicit amounts; no example budget, token count or cost is supplied:
 ```sh
-wisent-cost-tracker-onboarding run --budget-usd \"$BUDGET_USD\" \
-  --usage-tokens \"$USAGE_TOKENS\" --cost-usd \"$COST_USD\" --text
+wisent-cost-tracker-onboarding run --budget-usd "$BUDGET_USD" \
+  --usage-tokens "$USAGE_TOKENS" --cost-usd "$COST_USD" --text
 ```
-Amounts must be finite and non-negative; tokens must be a whole number. Other
+USD amounts must be finite and non-negative; tokens must be a positive whole number. Other
 actions refuse these flags before changing state. The library takes the same
-keyword arguments: `run_onboarding_action(\"run\", budget_usd=budget,
+keyword arguments: `run_onboarding_action("run", budget_usd=budget,
 usage_tokens=tokens, cost_usd=cost)`. It writes local usage and a budget decision,
 not a paid provider call. Exit codes are 0 for success, 2 for usage and 1 for
 operation failure. Refusals go to stderr; operation failures name the state file
