@@ -26,9 +26,17 @@ fn action(run: &Run, label: &str, verb: &str, central: bool, invalid_token: Opti
     if let Some(token) = invalid_token {
         environment.push(("WISENT_COST_TRACKER_STADO_INTEGRATION_TOKEN".into(), token.into()));
     }
-    let command = commands::execute(run, label, Path::new(&run.python), &[
+    let mut arguments = vec![
         run.site().join("bin/wisent-cost-tracker-onboarding").into_os_string(), verb.into(),
-    ], &environment)?;
+    ];
+    if verb == "run" {
+        arguments.extend([
+            "--budget-usd".into(), run.fixture.onboarding.budget_usd.to_string().into(),
+            "--usage-tokens".into(), run.fixture.onboarding.usage_tokens.to_string().into(),
+            "--cost-usd".into(), run.fixture.onboarding.cost_usd.to_string().into(),
+        ]);
+    }
+    let command = commands::execute(run, label, Path::new(&run.python), &arguments, &environment)?;
     command.require_success()?;
     let envelope: Value = read_json(&command.stdout)?;
     ensure!(envelope["ok"] == true, "onboarding command refused: {envelope}");
@@ -58,6 +66,11 @@ fn central_state(py: Python<'_>, oracle: &mut Oracle<'_>, local: &Value) -> Resu
 }
 
 pub fn run(run: &Run) -> Result<Value> {
+    let fixture = &run.fixture.onboarding;
+    ensure!(fixture.budget_usd.is_finite() && fixture.cost_usd.is_finite()
+        && !fixture.cost_usd.is_sign_negative() && fixture.budget_usd > fixture.cost_usd,
+        "onboarding fixture requires a finite non-negative cost below its finite budget");
+    cli_contract(run)?;
     let (initial, _) = action(run, "onboarding-initial-status", "status", false, None)?;
     ensure!(status(&initial)? == Status::NotStarted && !run.state_path(CASE).exists(),
         "offline status started or persisted an attempt");
@@ -80,6 +93,9 @@ pub fn run(run: &Run) -> Result<Value> {
         && status(&queued["progress"])? == Status::Completed
         && queued["evidence"]["budget_decision_observed"] == true,
         "actual tracker workflow did not complete first use: {offline}; {queued}");
+    ensure!(offline["usage"]["usage_amount"] == json!(fixture.usage_tokens)
+        && offline["usage"]["cost_usd"] == json!(fixture.cost_usd),
+        "run did not record the caller's exact amounts: {offline}");
     let events = queued["pending_events"].as_array_mut().context("offline events were not persisted")?;
     ensure!(!events.is_empty(), "offline first use falsely claimed central acknowledgement");
     // Previous release format, using events from the real workflow rather than
@@ -126,10 +142,70 @@ pub fn run(run: &Run) -> Result<Value> {
     let unknown = commands::execute(run, "onboarding-unknown-action", Path::new(&run.python), &[
         run.site().join("bin/wisent-cost-tracker-onboarding").into_os_string(), "unknown-qualification-action".into(),
     ], &run.environment(CASE, true)?)?;
-    let refusal: Value = read_json(&unknown.stdout)?;
-    ensure!(unknown.code == Some(2) && refusal["ok"] == false && refusal["error"]["code"] == "unknown_action"
+    let refusal = std::fs::read_to_string(&unknown.stderr)?;
+    ensure!(unknown.code.is_some_and(|code| code.is_positive()) && std::fs::read(&unknown.stdout)?.is_empty()
         && std::fs::read(run.state_path(CASE))? == bytes, "unknown action did not refuse without mutating the attempt");
+    let mut failing_environment = run.environment(CASE, false)?;
+    let impossible_path = run.state_path(CASE).join("attempt.json");
+    failing_environment.push(("WISENT_COST_TRACKER_ONBOARDING_STATE_PATH".into(), impossible_path.to_string_lossy().into_owned()));
+    let failed = commands::execute(run, "onboarding-state-refusal", Path::new(&run.python), &[
+        run.site().join("bin/wisent-cost-tracker-onboarding").into_os_string(), "show".into(),
+    ], &failing_environment)?;
+    let failure: Value = read_json(&failed.stderr)?;
+    ensure!(failed.code.is_some_and(|code| code.is_positive()) && std::fs::read(failed.stdout)?.is_empty()
+        && failure["error"]["code"] == "operation_failed"
+        && failure["error"]["message"].as_str().is_some_and(|message| message.contains(impossible_path.to_string_lossy().as_ref()))
+        && std::fs::read(run.state_path(CASE))? == bytes,
+        "state write failure did not report its path on stderr or changed the original state: {failure}");
+    let mut denied_run = run.clone();
+    denied_run.fixture.onboarding.budget_usd = fixture.cost_usd;
+    denied_run.fixture.onboarding.cost_usd = fixture.budget_usd;
+    action(&denied_run, "onboarding-denied-reset", "reset", false, None)?;
+    let (denied, _) = action(&denied_run, "onboarding-denied-run", "run", false, None)?;
+    let denied_state = state(run)?;
+    ensure!(!allowed(&denied)? && denied_state["evidence"]["decision"] == "deny"
+        && denied_state["evidence"]["cost_usd"] == json!(fixture.budget_usd)
+        && denied_state["evidence"]["usage_amount"] == json!(fixture.usage_tokens),
+        "caller amounts did not produce a persisted over-budget decision: {denied}; {denied_state}");
     Ok(json!({"offline": offline, "migrated_central_attempt": migrated, "online": online,
-        "central_attempt": central, "auth_refusal": auth_refusal, "unknown_action": refusal, "state": run.state_path(CASE),
+        "central_attempt": central, "denied": denied, "state_failure": failure,
+        "auth_refusal": auth_refusal, "unknown_action": refusal, "state": run.state_path(CASE),
         "audit_retention": "Owned attempts remain as immutable central onboarding audit evidence."}))
+}
+
+fn cli_contract(run: &Run) -> Result<()> {
+    let executable = run.site().join("bin/wisent-cost-tracker-onboarding").into_os_string();
+    let environment = run.environment(CASE, false)?;
+    for (label, arguments) in [
+        ("onboarding-top-help", vec!["--help"]),
+        ("onboarding-run-help", vec!["run", "--help"]),
+        ("onboarding-status-text", vec!["status", "--text"]),
+    ] {
+        let mut argv = vec![executable.clone()];
+        argv.extend(arguments.into_iter().map(Into::into));
+        let command = commands::execute(run, label, Path::new(&run.python), &argv, &environment)?;
+        command.require_success()?;
+        ensure!(!run.state_path(CASE).exists(), "{label} created onboarding state");
+        let output = std::fs::read_to_string(command.stdout)?;
+        if label == "onboarding-status-text" {
+            ensure!(output.contains("result.status: not_started") && serde_json::from_str::<Value>(&output).is_err(),
+                "text status did not describe the same not-started state: {output}");
+        }
+    }
+    let budget = run.fixture.onboarding.budget_usd.to_string();
+    let tokens = run.fixture.onboarding.usage_tokens.to_string();
+    for (label, arguments) in [
+        ("onboarding-missing-amounts", vec!["run"]),
+        ("onboarding-unexpected-amount", vec!["status", "--cost-usd", "NaN"]),
+        ("onboarding-nonfinite-cost", vec!["run", "--budget-usd", &budget, "--usage-tokens", &tokens, "--cost-usd", "NaN"]),
+        ("onboarding-conflicting-format", vec!["status", "--text", "--json"]),
+    ] {
+        let mut argv = vec![executable.clone()];
+        argv.extend(arguments.into_iter().map(Into::into));
+        let command = commands::execute(run, label, Path::new(&run.python), &argv, &environment)?;
+        ensure!(command.code.is_some_and(|code| code.is_positive())
+            && std::fs::read(command.stdout)?.is_empty()
+            && !run.state_path(CASE).exists(), "{label} did not refuse before changing state");
+    }
+    Ok(())
 }

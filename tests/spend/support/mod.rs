@@ -32,6 +32,9 @@ pub struct SupabaseFixture {
 pub struct OnboardingFixture {
     pub url: String,
     pub token_env: String,
+    pub budget_usd: f64,
+    pub usage_tokens: u64,
+    pub cost_usd: f64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 mod bridge;
 mod budget;
+mod onboarding;
 mod pricing;
 mod sinks;
 mod tracker;
@@ -18,6 +19,9 @@ fn spend(module: &Bound<'_, PyModule>) -> PyResult<()> {
     pricing::register(&pricing)?;
     modules.set_item("wisent_cost_tracker.pricing", &pricing)?;
     py.import("wisent_cost_tracker")?.setattr("pricing", pricing)?;
+    let actions = PyModule::new(py, "wisent_cost_tracker.onboarding.actions")?;
+    onboarding::register(&actions)?;
+    modules.set_item("wisent_cost_tracker.onboarding.actions", actions)?;
     let sinks = PyModule::new(py, "wisent_cost_tracker.spend.sinks")?;
     sinks::register(&sinks)?;
     let budget = PyModule::new(py, "wisent_cost_tracker.spend.budget")?;

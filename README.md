@@ -118,10 +118,10 @@ recording usage does not itself prevent a provider from charging.
 `py/pyproject.toml` declares the Python requirement and two PyO3 extensions:
 `wisent_cost_tracker.spend` from `py/native/`, and
 `wisent_cost_tracker.onboarding.engine.control_plane` from `py/control-plane/`.
-The public Python imports remain available; this is not a standalone Rust CLI.
-The spend extension also registers the public `wisent_cost_tracker.pricing` module.
-Record types and parts of onboarding still have Python source; the whole package
-has not moved to Rust. No Python pricing or control-plane fallback is shipped.
+The spend extension registers pricing and onboarding actions under their public
+Python import paths. The command is the wheel's console entry, not a standalone
+Rust binary. Journey state, observations and record types still use Python.
+No Python pricing, action dispatch or control-plane fallback is shipped.
 
 Building the package requires Rust, Cargo and the Python build requirements
 declared in that manifest. From the repository root:
@@ -177,7 +177,6 @@ share the active write and then publish any additional records they requested.
 `remaining` returns infinity in that case. Applications requiring a configured
 budget must check that `get_status` / `getStatus` returned rows, as above.
 
-
 ## Schema (Supabase)
 
 The schema is declared in
@@ -232,30 +231,30 @@ writing the same file concurrently are not a shared append log.
 
 ## First use and central onboarding
 
-The installed command `wisent-cost-tracker-onboarding` accepts `show`, `status`,
-`skip`, `abandon`, `reset` and `run`. `status` does not start a fresh attempt.
-`run` records real local usage, writes a budget and takes a budget decision.
-It does not make a paid provider call. The command emits a JSON envelope and
-exits 0 on success, 1 on an operation failure or 2 for an unknown action.
-
-Set `WISENT_COST_TRACKER_ONBOARDING_STATE_PATH` to isolate an application's
-state. The central service is **wisent-integrations**, which forwards onboarding
-operations to Echo. The shipped environment names remain
-`STADO_INTEGRATION_API_URL` and `WISENT_COST_TRACKER_STADO_INTEGRATION_TOKEN`;
-they mean that service's HTTPS origin and client bearer, not the Stado fleet API.
-An origin containing credentials, a path, a query or a fragment is refused.
-Requests use `/api/integration/onboarding/wisent-cost-tracker.<operation>`.
-
-Offline completion is local completion, not central acknowledgement. Events
-stay in the persisted queue until the service accepts them. Failures report
-the operation and cause on stderr; a new command attempts delivery again.
-Previously queued events are migrated to the current service schema before
-delivery while retaining their event IDs and evidence. A successful local
-`run` alone does not prove that Echo received its events.
-
-This SDK has no standalone graphical application. Applications use the same
-public library methods to display spend, budget status and failures; CLI state
-is not a separate spend backend.
+`wisent-cost-tracker-onboarding` accepts `show`, `status`, `skip`, `abandon`,
+`reset` and `run`. `--help` works with or without an action and changes no state.
+`status` does not start an attempt. `--json` is the default; `--text` renders the
+same result as field/value lines. The two output flags are mutually exclusive.
+`run` requires explicit amounts; no example budget, token count or cost is supplied:
+```sh
+wisent-cost-tracker-onboarding run --budget-usd \"$BUDGET_USD\" \
+  --usage-tokens \"$USAGE_TOKENS\" --cost-usd \"$COST_USD\" --text
+```
+Amounts must be finite and non-negative; tokens must be a whole number. Other
+actions refuse these flags before changing state. The library takes the same
+keyword arguments: `run_onboarding_action(\"run\", budget_usd=budget,
+usage_tokens=tokens, cost_usd=cost)`. It writes local usage and a budget decision,
+not a paid provider call. Exit codes are 0 for success, 2 for usage and 1 for
+operation failure. Refusals go to stderr; operation failures name the state file
+and cause. `WISENT_COST_TRACKER_ONBOARDING_STATE_PATH` isolates persisted state.
+The central service is wisent-integrations, forwarding to Echo. Set its HTTPS
+origin in `STADO_INTEGRATION_API_URL` and its client bearer in
+`WISENT_COST_TRACKER_STADO_INTEGRATION_TOKEN`; credentials, paths, queries and
+fragments in the origin are refused. Requests use
+`/api/integration/onboarding/wisent-cost-tracker.<operation>`. Offline completion
+does not acknowledge central delivery: events stay queued, retain their IDs
+through migration and are sent again by later commands. This SDK has no standalone
+GUI; applications use the same public library results and failures.
 
 ## Real qualification
 
@@ -267,7 +266,8 @@ network access to the declared real services. Compilation alone is not a pass.
 
 Provide a JSON fixture under the checkout's ignored `.build/` directory with
 `supabase.url`, `supabase.key_env`, `supabase.pagination_records`,
-`supabase.pagination_budgets`, `onboarding.url` and `onboarding.token_env`.
+`supabase.pagination_budgets`, `onboarding.url`, `onboarding.token_env`, `onboarding.budget_usd`,
+`onboarding.usage_tokens` and `onboarding.cost_usd`; the cost must be below the budget.
 The `*_env` fields name existing credential environment variables, not tokens.
 The Supabase fixture must have the reference schema and allow isolated agent
 rows to be created, read, updated and deleted. The onboarding fixture must
@@ -288,11 +288,11 @@ cargo run --locked --manifest-path tests/spend/Cargo.toml -- \
 
 The driver retains the exact revision, package hashes, commands, exit statuses,
 stdout, stderr, full HTTP observations and final state under `.build/spend/`.
-It covers small costs, explicit free charges, refusal of missing and invalid
-raw amounts without buffered or persisted records, later and concurrent flushes,
+It covers small costs, explicit free charges, invalid amounts refused before
+state changes, CLI help and both output forms, later and concurrent flushes,
 corrupt files, exact and variant model prices, unknown-price refusals, native garbage collection, interpreter exit and signals, real
 Supabase pagination and budget edits, authentication failures, complete provider
-errors, offline event migration and centrally persisted first use.
+errors, offline event migration, caller-priced allow/deny decisions and central first use.
 Cleanup verifies ownership before deleting qualification rows and confirms
 their absence. It also runs after failures; `cleanup` can recover an interrupted
 run. Echo attempts remain as central audit evidence.
