@@ -147,8 +147,8 @@ number of decimal places. This does not turn floating-point values into exact
 decimal money; the supplied numeric representation and backend schema still
 determine precision.
 
-The native HTTP transport waits for its operation to return rather than assigning
-a client request deadline. A stuck connection can therefore hold up an explicit
+The native HTTP transport waits until its operation returns. A stuck connection
+can therefore hold up an explicit
 flush or process shutdown. The automatic exit hooks report flush failures on
 stderr; call `flush` explicitly when the caller must handle a failed write.
 
@@ -213,8 +213,8 @@ The TypeScript package requires Node 22 or later. `npm ci` runs the package's
 Python requires CPython 3.11 or later. Both native extension manifests use the
 committed `py/Cargo.lock` through setuptools-rust's `--locked` manifest option.
 
-Both HTTP implementations read the entire response without setting a request
-deadline. The Python implementation uses HTTPX's public request and transport
+Both HTTP implementations read the entire response and wait for it to finish.
+The Python implementation uses HTTPX's public request and transport
 interfaces; the Node implementation uses `node:http` and `node:https`.
 These choices do not remove failures imposed by the operating system, network
 or server. No automatic retry changes an ambiguous write into a second charge.
