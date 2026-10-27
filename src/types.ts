@@ -8,8 +8,21 @@ export interface CostRecord {
   cost_usd: number;
   reference_id?: string;    // e.g. ACTION_LOG_ID, trade_id
   metadata?: Record<string, unknown>;
-  created_at?: string;      // ISO timestamp; sink fills it if absent
+  // ISO timestamp. CostTracker.record sets it when the caller leaves it out;
+  // a record written to a sink directly keeps it absent in FileSink and
+  // MemorySink, and the Supabase table fills it with its column default now().
+  created_at?: string;
+  // The agent the spend is attributed to. CostTracker.record sets the
+  // tracker's own agent_id on every record it buffers and returns;
+  // SupabaseSink.read selects records by it, and the cost_budget_status view
+  // counts a record against the budgets of the agent it names. Ownership is
+  // readonly; the other fields intentionally remain editable before flush.
+  readonly agent_id?: string;
 }
+
+/** What CostTracker.record takes: a record without agent_id, which the
+ *  tracker sets itself. */
+export type RecordInput = Omit<CostRecord, 'agent_id'>;
 
 export interface BudgetSnapshot {
   cost_usd: number;

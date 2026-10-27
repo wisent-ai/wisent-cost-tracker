@@ -1,6 +1,13 @@
-import type { CostRecord, CostSink, UsageType } from '../types.js';
+import type { CostRecord, CostSink, RecordInput, UsageType } from '../types.js';
 import { MemorySink, FileSink, SupabaseSink, type SupabaseSinkOptions } from './sinks.js';
 import { captchaPrice, smsPrice, proxyCostForBytes, llmCost, computeCost, PRICES } from '../pricing.js';
+
+// Symbol.for identifies listeners across independently loaded package copies.
+const TRACKER_SIGNAL = Symbol.for('@wisent/cost-tracker:signal-listener');
+
+// Per-call quantity declared in docs/record-helpers.md:
+// https://github.com/wisent-ai/wisent-cost-tracker/blob/main/docs/record-helpers.md
+const SINGLE_EVENT_USAGE = 1;
 
 export interface CostTrackerOptions {
   agent_id: string;
@@ -18,8 +25,9 @@ export class CostTracker {
   private buffer: CostRecord[] = [];
   private agent_id: string;
   private reference_id?: string;
-  private accepted = 0;
+  private accepted = this.buffer.length;
   private flushing: Promise<void> | undefined;
+  private failedExitHook?: () => void;
 
   constructor(opts: CostTrackerOptions) {
     this.agent_id = opts.agent_id;
@@ -36,22 +44,61 @@ export class CostTracker {
     if (opts.autoFlush !== false) this.installExitHooks();
   }
 
-  // A signal exits only after the sink has answered the flush, however long
-  // that takes; a failed flush is reported on stderr, never swallowed.
+  // The last tracker restores the signal's default action only when no
+  // application listener remains. Applications retain control of later signals.
   private installExitHooks(): void {
-    const flush = () => this.flush().catch((error) => {
+    const reportFailure = (error: unknown) => {
       console.error(`CostTracker: flushing spend records failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    process.on('beforeExit', () => { void flush(); });
-    process.on('SIGINT', () => { void flush().finally(() => process.exit(130)); });
-    process.on('SIGTERM', () => { void flush().finally(() => process.exit(143)); });
+    };
+    const flush = () => this.flush().catch(reportFailure);
+    const beforeExit = () => {
+      const pending = this.buffer.length;
+      void this.flush().catch((error) => {
+        if (this.buffer.length === pending) {
+          process.off('beforeExit', beforeExit);
+          this.failedExitHook = beforeExit;
+        }
+        reportFailure(error);
+      });
+    };
+    process.on('beforeExit', beforeExit);
+    const onSignal = (signal: NodeJS.Signals) => {
+      const hasApplicationListener = () => process.listeners(signal).some((listener) =>
+        Reflect.get(listener, TRACKER_SIGNAL) !== true);
+      // once listeners disappear before their callback runs; remember ownership
+      // before awaiting the sink, not only after the flush has completed.
+      const applicationOwnsSignal = hasApplicationListener();
+      void flush().finally(() => {
+        if (applicationOwnsSignal || hasApplicationListener()) return;
+        if (!process.listeners(signal).includes(onSignal)) return;
+        process.off(signal, onSignal);
+        if (!process.listeners(signal).length) process.kill(process.pid, signal);
+      });
+    };
+    Object.defineProperty(onSignal, TRACKER_SIGNAL, { value: true });
+    // Run before application listeners already installed with once().
+    process.prependListener('SIGINT', onSignal);
+    process.prependListener('SIGTERM', onSignal);
   }
 
-  /** Append a raw record with an explicitly supplied, finite amount. */
-  record(rec: CostRecord): CostRecord {
+  /** Append a raw record with an explicitly supplied, finite amount, as this
+   *  tracker's agent's: the record returned and flushed carries the
+   *  tracker's agent_id, and one that names another agent is refused before
+   *  anything is buffered. The record keeps a shallow copy of the caller's
+   *  metadata object, an empty one when none is given. */
+  record(rec: RecordInput): CostRecord {
+    const claimed = (rec as Partial<CostRecord>).agent_id;
+    if (claimed !== undefined && claimed !== this.agent_id) {
+      throw new TypeError(`CostTracker.record: agent_id ${JSON.stringify(claimed)} is not this tracker's agent ${JSON.stringify(this.agent_id)}; record another agent's spend with a CostTracker for that agent`);
+    }
     const cost_usd = rec.cost_usd;
     if (typeof cost_usd !== 'number' || !Number.isFinite(cost_usd)) {
       throw new TypeError('CostTracker.record: cost_usd must be an explicit finite number; use a pricing helper when the amount is unknown');
+    }
+    if (rec.metadata !== undefined && (rec.metadata === null ||
+        typeof rec.metadata !== 'object' ||
+        ![Object.prototype, null].includes(Object.getPrototypeOf(rec.metadata)))) {
+      throw new TypeError('CostTracker.record: metadata must be a plain object when supplied; omit it when no metadata is available');
     }
     const full: CostRecord = {
       service: rec.service,
@@ -60,10 +107,17 @@ export class CostTracker {
       usage_amount: rec.usage_amount,
       cost_usd,
       reference_id: rec.reference_id ?? this.reference_id,
-      metadata: rec.metadata ?? {},
+      metadata: { ...rec.metadata },
       created_at: rec.created_at ?? new Date().toISOString(),
+      agent_id: this.agent_id,
     };
+    // Returned and snapshot records share the buffer's entry; its owner cannot change.
+    Object.defineProperty(full, 'agent_id', { writable: false, configurable: false });
     this.buffer.push(full);
+    if (this.failedExitHook) {
+      process.on('beforeExit', this.failedExitHook);
+      this.failedExitHook = undefined;
+    }
     return full;
   }
 
@@ -72,7 +126,7 @@ export class CostTracker {
       service: `captcha_${service}`,
       resource: taskType,
       usage_type: 'solves',
-      usage_amount: 1,
+      usage_amount: SINGLE_EVENT_USAGE,
       cost_usd: override ?? captchaPrice(service, taskType),
     });
   }
@@ -82,7 +136,7 @@ export class CostTracker {
       service: `sms_${provider}`,
       resource: platform,
       usage_type: 'units',
-      usage_amount: 1,
+      usage_amount: SINGLE_EVENT_USAGE,
       cost_usd: override ?? smsPrice(provider, platform),
     });
   }
@@ -111,7 +165,7 @@ export class CostTracker {
 
   recordCompute(instanceType: string, seconds: number, override?: number): CostRecord {
     return this.record({
-      service: `compute_${instanceType.split('_')[0] ?? 'other'}`,
+      service: `compute_${instanceType.split('_')[0]}`,
       resource: instanceType,
       usage_type: 'seconds',
       usage_amount: seconds,
@@ -119,7 +173,7 @@ export class CostTracker {
     });
   }
 
-  recordEmail(provider: string, count = 1, override?: number): CostRecord {
+  recordEmail(provider: string, count = SINGLE_EVENT_USAGE, override?: number): CostRecord {
     const unit = (PRICES.email as Record<string, number>)[provider] ?? PRICES.email.default;
     return this.record({
       service: `email_${provider}`,
@@ -131,13 +185,21 @@ export class CostTracker {
   }
 
   /** Total $ across all buffered records. */
-  total(): number { return this.buffer.reduce((a, r) => a + r.cost_usd, 0); }
+  total(): number {
+    // The empty sum is the additive identity: https://en.wikipedia.org/wiki/Empty_sum.
+    return this.buffer.reduce((sum, record) => sum + record.cost_usd, 0);
+  }
 
-  /** Per-service cost rollup compatible with weles' service_costs JSONB. */
+  /** Per-service cost rollup compatible with weles' service_costs JSONB.
+   *  Every name, including __proto__, is its own key. Grouping additions
+   *  can round differently from total(), which adds in record order. */
   snapshot(): { cost_usd: number; service_costs: Record<string, number>; records: CostRecord[] } {
-    const service_costs: Record<string, number> = {};
-    for (const r of this.buffer) service_costs[r.service] = (service_costs[r.service] ?? 0) + r.cost_usd;
-    return { cost_usd: this.total(), service_costs, records: this.buffer.slice() };
+    const sums = new Map<string, number>();
+    for (const r of this.buffer) {
+      const sum = sums.get(r.service);
+      sums.set(r.service, sum === undefined ? r.cost_usd : sum + r.cost_usd);
+    }
+    return { cost_usd: this.total(), service_costs: Object.fromEntries(sums), records: this.buffer.slice() };
   }
 
   /** Publish every record present at this call, without resending accepted
@@ -149,14 +211,10 @@ export class CostTracker {
         await this.flushing;
         continue;
       }
-      const start = this.accepted;
-      const stamped = new Array<CostRecord>(end - start);
-      for (let index = start; index < end; index += 1) {
-        stamped[index - start] = { ...this.buffer[index]!, agent_id: this.agent_id };
-      }
+      const pending = this.buffer.slice(this.accepted, end);
       const writing = Promise.resolve()
-        .then(() => this.sink.write(stamped))
-        .then(() => { this.accepted = end; });
+        .then(() => this.sink.write(pending))
+        .then(() => { this.accepted += pending.length; });
       this.flushing = writing;
       try {
         await writing;

@@ -147,10 +147,10 @@ number of decimal places. This does not turn floating-point values into exact
 decimal money; the supplied numeric representation and backend schema still
 determine precision.
 
-The native HTTP transport waits until its operation returns. A stuck connection
-can therefore hold up an explicit
-flush or process shutdown. The automatic exit hooks report flush failures on
-stderr; call `flush` explicitly when the caller must handle a failed write.
+The native HTTP transport waits until its operation returns, so a stuck
+connection can hold up an explicit flush or process shutdown. What each
+TypeScript record helper records, the agent `record` attributes spend to and
+what the exit hooks do on a signal: [docs/record-helpers.md](docs/record-helpers.md).
 
 The native transport reports the operation, method, URL and cause for a failed
 request. A non-success HTTP response also includes its status and full response

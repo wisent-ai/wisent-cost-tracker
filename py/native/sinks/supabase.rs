@@ -117,17 +117,25 @@ impl SupabaseSink {
                     "SupabaseSink {progress} expected an array from {url}: {cause}; body: {decoded}")))?;
                 let range: Option<String> = response.getattr("headers")?
                     .call_method1("get", ("content-range",))?.extract()?;
-                let total = range.as_deref().and_then(|range| range.rsplit_once('/'))
-                    .and_then(|(_, total)| total.parse::<usize>().ok());
+                let Some(range) = range else {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "SupabaseSink {progress} from {url} answered without the Content-Range header that count=exact asks for, so whether every row was read is unknown")));
+                };
+                let Some((_, total)) = range.rsplit_once('/') else {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "SupabaseSink {progress} from {url} answered Content-Range {range:?}, which carries no row total")));
+                };
+                let total = total.parse::<usize>().map_err(|cause| PyRuntimeError::new_err(format!(
+                    "SupabaseSink {progress} from {url} answered Content-Range {range:?}, whose row total is not a count: {cause}")))?;
                 if page.is_empty() {
-                    if total.is_some_and(|total| offset < total) {
+                    if offset < total {
                         return Err(PyRuntimeError::new_err(format!(
                             "SupabaseSink {operation} stopped after {offset} rows but Content-Range reports {range:?}")));
                     }
                     return Ok(rows);
                 }
                 rows.call_method1("extend", (page,))?;
-                if total.is_some_and(|total| rows.len() >= total) { return Ok(rows); }
+                if rows.len() >= total { return Ok(rows); }
             }
         })
     }

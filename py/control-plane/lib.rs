@@ -34,7 +34,11 @@ impl StadoTransport {
 
     fn post<'py>(&mut self, py: Python<'py>, operation: &str, body: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
         if !self.available {
-            return Err(PyRuntimeError::new_err(self.last_error.clone().unwrap_or_else(|| "onboarding control plane is unavailable".into())));
+            let detail = match &self.last_error {
+                Some(failure) => failure.clone(),
+                None => "the onboarding control plane was set unavailable by its caller; no request to wisent-integrations failed".to_string(),
+            };
+            return Err(PyRuntimeError::new_err(detail));
         }
         if self.base_url.is_empty() || self.token.trim().is_empty() {
             return Err(PyRuntimeError::new_err("wisent-integrations requires its HTTPS origin in STADO_INTEGRATION_API_URL and the client bearer in WISENT_COST_TRACKER_STADO_INTEGRATION_TOKEN"));
@@ -98,7 +102,7 @@ impl StadoTransport {
         }
         let payload = match body.cast::<PyDict>() {
             Ok(body) => body.clone(),
-            Err(_) => {
+            Err(_not_a_dict) => {
                 let payload = PyDict::new(py);
                 payload.call_method1("update", (body,))?;
                 payload

@@ -8,6 +8,6 @@ export {
 export { MemorySink, FileSink, SupabaseSink, type SupabaseSinkOptions } from './spend/sinks.js';
 export { SupabaseRequestError } from './spend/http.js';
 export type {
-  CostRecord, CostSink, UsageType,
+  CostRecord, CostSink, RecordInput, UsageType,
   BudgetSnapshot, BudgetStatus, BudgetPeriod,
 } from './types.js';
