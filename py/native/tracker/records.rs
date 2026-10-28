@@ -13,8 +13,13 @@ impl CostTracker {
         if service.trim().is_empty() {
             return Err(PyValueError::new_err("CostTracker: service must be a non-empty string"));
         }
-        if !matches!(usage_type, "solves" | "tokens" | "bytes" | "seconds" | "units" | "emails") {
-            return Err(PyValueError::new_err(format!("CostTracker: unsupported usage_type {usage_type:?}")));
+        // The usage types are the ones `wisent_cost_tracker.types.UsageType`
+        // declares; this check reads that declaration rather than a copy.
+        let declared = py
+            .import("typing")?
+            .call_method1("get_args", (py.import("wisent_cost_tracker.types")?.getattr("UsageType")?,))?;
+        if !declared.contains(usage_type)? {
+            return Err(PyValueError::new_err(format!("CostTracker: unsupported usage_type {usage_type:?}; declared: {declared}")));
         }
         bridge::numeric(py, usage_amount, "CostTracker: usage_amount", true)?;
         bridge::numeric(py, cost_usd, "CostTracker: cost_usd", false)?;
@@ -29,7 +34,12 @@ impl CostTracker {
         } else {
             kwargs.set_item("reference_id", self.options.bind(py).getattr("reference_id")?)?;
         }
-        let metadata = metadata.filter(|metadata| !metadata.is_empty()).cloned().unwrap_or_else(|| PyDict::new(py));
+        // A call that states no metadata records an empty mapping, the shape
+        // CostRecord stores for "nothing stated".
+        let metadata = match metadata.filter(|metadata| !metadata.is_empty()) {
+            Some(metadata) => metadata.clone(),
+            None => PyDict::new(py),
+        };
         kwargs.set_item("metadata", metadata)?;
         kwargs.set_item("created_at", bridge::now_string(py)?)?;
         kwargs.set_item("agent_id", self.options.bind(py).getattr("agent_id")?)?;
@@ -83,11 +93,10 @@ impl CostTracker {
             None => py.import("wisent_cost_tracker.pricing")?.call_method1("llm_cost", (model, input, output))?,
         };
         let amount = py.import("operator")?.call_method1("add", (input, output))?;
-        let lower = model.to_lowercase();
-        let service = if lower.contains("gemini") { "gemini" } else if lower.contains("claude") {
-            "claude"
-        } else if lower.contains("gpt") { "openai" } else { "other" };
-        self.record(py, &format!("llm_{service}"), "tokens", &amount, &cost, Some(model), None, Some(&metadata))
+        // Filed under `llm` with the model as the resource: the provider is
+        // not declared anywhere the tracker can read, so it is not guessed
+        // from words in the model name.
+        self.record(py, "llm", "tokens", &amount, &cost, Some(model), None, Some(&metadata))
     }
 
     #[pyo3(signature = (instance_type, seconds, r#override=None))]
@@ -97,7 +106,13 @@ impl CostTracker {
             Some(cost) => cost,
             None => py.import("wisent_cost_tracker.pricing")?.call_method1("compute_cost", (instance_type, seconds))?,
         };
-        let provider = instance_type.split('_').next().unwrap_or(instance_type);
+        // Compute prices are declared under `<provider>_<instance>` keys; an
+        // instance type with no provider segment (a local machine) is filed
+        // under its own name, as the TypeScript tracker files it.
+        let provider = match instance_type.split_once('_') {
+            Some((provider, _)) => provider,
+            None => instance_type,
+        };
         self.record(py, &format!("compute_{provider}"), "seconds", seconds, &cost, Some(instance_type), None, None)
     }
 
@@ -117,10 +132,15 @@ impl CostTracker {
     }
 }
 
+/// The token count a call that states none records: none.
 fn zero() -> Py<PyAny> {
-    Python::attach(|py| 0_i64.into_pyobject(py).unwrap().into_any().unbind())
+    let none: i64 = Default::default();
+    Python::attach(|py| none.into_pyobject(py).unwrap().into_any().unbind())
 }
 
+/// The count of a call that records one solve, unit or email.
 fn one() -> Py<PyAny> {
-    Python::attach(|py| 1_i64.into_pyobject(py).unwrap().into_any().unbind())
+    Python::attach(|py| {
+        std::num::NonZeroU64::MIN.get().into_pyobject(py).unwrap().into_any().unbind()
+    })
 }

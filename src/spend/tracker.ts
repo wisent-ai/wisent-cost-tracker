@@ -152,13 +152,16 @@ export class CostTracker {
     });
   }
 
+  /** Filed under `llm` with the model as the resource: the provider is not
+   *  declared anywhere the tracker can read, so it is not guessed from words
+   *  in the model name. */
   recordLlm(model: string, inputTokens: number, outputTokens: number, override?: number): CostRecord {
     return this.record({
-      service: `llm_${normalizeLlmService(model)}`,
+      service: 'llm',
       resource: model,
       usage_type: 'tokens',
       usage_amount: inputTokens + outputTokens,
-      cost_usd: override ?? llmCost(model, inputTokens, outputTokens),
+      cost_usd: override === undefined ? llmCost(model, inputTokens, outputTokens) : override,
       metadata: { input_tokens: inputTokens, output_tokens: outputTokens },
     });
   }
@@ -226,13 +229,4 @@ export class CostTracker {
 
   /** Underlying sink, for advanced usage (e.g. read-back during the same run). */
   getSink(): CostSink { return this.sink; }
-}
-
-
-function normalizeLlmService(model: string): string {
-  const m = model.toLowerCase();
-  if (m.includes('gemini')) return 'gemini';
-  if (m.includes('claude')) return 'claude';
-  if (m.includes('gpt')) return 'openai';
-  return 'other';
 }
