@@ -106,14 +106,10 @@ impl CostTracker {
             Some(cost) => cost,
             None => py.import("wisent_cost_tracker.pricing")?.call_method1("compute_cost", (instance_type, seconds))?,
         };
-        // Compute prices are declared under `<provider>_<instance>` keys; an
-        // instance type with no provider segment (a local machine) is filed
-        // under its own name, as the TypeScript tracker files it.
-        let provider = match instance_type.split_once('_') {
-            Some((provider, _)) => provider,
-            None => instance_type,
-        };
-        self.record(py, &format!("compute_{provider}"), "seconds", seconds, &cost, Some(instance_type), None, None)
+        // Filed under `compute` with the instance type as the resource: an
+        // undeclared instance type names no provider, so none is cut out of
+        // its spelling.
+        self.record(py, "compute", "seconds", seconds, &cost, Some(instance_type), None, None)
     }
 
     #[pyo3(signature = (provider, count=one(), r#override=None))]
@@ -132,15 +128,25 @@ impl CostTracker {
     }
 }
 
-/// The token count a call that states none records: none.
+/// The quantity a captcha, SMS or email helper records for one call
+/// (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/docs/record-helpers.md).
+const SINGLE_EVENT_USAGE: u64 = 1;
+
+/// The tokens a side of an LLM call that states none used, as `record_llm`'s
+/// declared signature `input_tokens=0, output_tokens=0` says
+/// (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/README.md).
+const OMITTED_TOKENS: u64 = 0;
+
 fn zero() -> Py<PyAny> {
-    let none: i64 = Default::default();
-    Python::attach(|py| none.into_pyobject(py).unwrap().into_any().unbind())
+    Python::attach(|py| {
+        let Ok(count) = OMITTED_TOKENS.into_pyobject(py);
+        count.into_any().unbind()
+    })
 }
 
-/// The count of a call that records one solve, unit or email.
 fn one() -> Py<PyAny> {
     Python::attach(|py| {
-        std::num::NonZeroU64::MIN.get().into_pyobject(py).unwrap().into_any().unbind()
+        let Ok(count) = SINGLE_EVENT_USAGE.into_pyobject(py);
+        count.into_any().unbind()
     })
 }

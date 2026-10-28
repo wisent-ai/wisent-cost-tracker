@@ -140,37 +140,24 @@ fn proxy_cost_for_bytes(
     Ok(fraction(py, num_bytes, BYTES_PER_GIB)? * price.extract::<f64>()?)
 }
 
-/// The catalogue entry pricing `model`: its exact key, otherwise the longest
-/// key the model name contains (a dated variant keeps its family's price),
-/// otherwise the declared table default.
+/// The catalogue entry pricing `model`: the entry whose key is the model name
+/// (case aside), otherwise the declared table default. A model the catalogue
+/// does not list is priced at the default, never at a listed model whose key
+/// its name happens to contain.
 fn llm_entry<'py>(py: Python<'py>, model: &str) -> PyResult<Bound<'py, PyAny>> {
     let model = model.to_lowercase();
     let catalog = table(py, "llm")?;
-    let mut matched: Option<(usize, Bound<'py, PyAny>)> = None;
     for (key, value) in catalog.iter() {
         let key = key.extract::<String>()?;
-        if key == "default" {
-            continue;
-        }
-        let normalized = key.to_lowercase();
-        if normalized == model {
+        if key != "default" && key.to_lowercase() == model {
             return Ok(value);
         }
-        let length = normalized.encode_utf16().count();
-        if model.contains(&normalized)
-            && matched.as_ref().is_none_or(|(longest, _)| length > *longest)
-        {
-            matched = Some((length, value));
-        }
     }
-    match matched {
-        Some((_, value)) => Ok(value),
-        None => catalog.get_item("default")?.ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "No declared LLM price for model={model:?} and no table default"
-            ))
-        }),
-    }
+    catalog.get_item("default")?.ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "No declared LLM price for model={model:?} and no table default"
+        ))
+    })
 }
 
 #[pyfunction]

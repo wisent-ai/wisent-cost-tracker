@@ -166,9 +166,12 @@ export class CostTracker {
     });
   }
 
+  /** Filed under `compute` with the instance type as the resource: an
+   *  undeclared instance type names no provider, so none is cut out of its
+   *  spelling. */
   recordCompute(instanceType: string, seconds: number, override?: number): CostRecord {
     return this.record({
-      service: `compute_${instanceType.split('_')[0]}`,
+      service: 'compute',
       resource: instanceType,
       usage_type: 'seconds',
       usage_amount: seconds,

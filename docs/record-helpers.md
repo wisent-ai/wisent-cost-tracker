@@ -8,9 +8,9 @@ caller gives no count. `recordProxyBytes`, `recordLlm` and `recordCompute`
 record the bytes, tokens and seconds they are given. `recordLlm` (Python
 `record_llm`) files every model call under the service `llm` with the model as
 the resource: the price catalogue declares no provider for a model, so none is
-guessed from words in its name. `recordCompute` names its service after the
-instance type's provider, the text before its first underscore (all of it
-when there is none).
+guessed from words in its name. `recordCompute` (Python `record_compute`) files
+every instance under the service `compute` with the instance type as the
+resource, for the same reason: an undeclared instance type names no provider.
 
 ## The agent a record is attributed to
 

@@ -95,13 +95,13 @@ test('the rollup sums each service independently, including __proto__', () => {
   assert.deepEqual(service_costs, { ['__proto__']: cost + cost, email_resend: cost });
 });
 
-test('compute charges group qualified and bare instance types by provider', async () => {
+test('compute charges file every instance type under compute with the instance as resource', async () => {
   const file = join(scratch, `${randomUUID()}-compute.json`);
   const tracker = new CostTracker({ agent_id: randomUUID(), sink: 'file', filePath: file, autoFlush: false });
   const usage = input({});
   for (const instance of ['cloud_machine', 'local']) tracker.recordCompute(instance, usage.usage_amount, usage.cost_usd);
   await tracker.flush();
-  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).map((row) => row.service), ['compute_cloud', 'compute_local']);
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).map((row) => [row.service, row.resource]), [['compute', 'cloud_machine'], ['compute', 'local']]);
 });
 
 /** The child process for `mode` writing `files`, its readiness and its

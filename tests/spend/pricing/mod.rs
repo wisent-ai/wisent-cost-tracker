@@ -4,6 +4,24 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{json, Value};
 
+/// The quantity a captcha, SMS or email helper records for one call
+/// (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/docs/record-helpers.md).
+const SINGLE_EVENT_USAGE: f64 = 1.0;
+/// Bytes in a gibibyte, the unit proxy prices are declared per
+/// (IEC 80000-13 binary prefixes, https://www.iso.org/standard/87648.html).
+const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
+/// Tokens in the block an LLM price is declared per: the catalogue's
+/// `input_per_1k` and `output_per_1k` keys
+/// (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/pricing/costs.json).
+const TOKENS_PER_PRICED_BLOCK: u64 = 1000;
+/// Seconds in an hour, the unit compute prices are declared per
+/// (SI Brochure, https://www.bipm.org/en/publications/si-brochure).
+const SECONDS_PER_HOUR: u64 = 3600;
+/// The output tokens `record_llm` records when a call states none, as its
+/// declared signature `input_tokens=0, output_tokens=0` says
+/// (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/py/native/tracker/records.rs).
+const OMITTED_TOKENS: u64 = 0;
+
 pub fn run(py: Python<'_>, run: &Run) -> Result<Value> {
     let catalog: Value = read_json(&run.root.join("pricing/costs.json"))?;
     let price = |pointer: &str| -> Result<f64> {
@@ -12,68 +30,64 @@ pub fn run(py: Python<'_>, run: &Run) -> Result<Value> {
             .and_then(Value::as_f64)
             .with_context(|| format!("canonical price missing at {pointer}"))
     };
+    let block_cost = |model: &str| -> Result<f64> {
+        Ok(price(&format!("/llm/{model}/input_per_1k"))? + price(&format!("/llm/{model}/output_per_1k"))?)
+    };
     let tracker = python::tracker(py, &python::uuid(py)?, "memory", None, None, false)?;
+    // A known free charge, measured as what a tracker holding nothing totals.
+    let free: f64 = tracker.call_method0("total")?.extract()?;
     let mut expected = Vec::new();
     tracker.call_method1("record_captcha", ("capsolver", "recaptcha_v2"))?;
     expected.push((
         "captcha_capsolver",
         "solves",
-        1.0,
+        SINGLE_EVENT_USAGE,
         price("/captcha/capsolver/recaptcha_v2")?,
     ));
     tracker.call_method1("record_sms", ("juicysms", "REDDIT"))?;
-    expected.push(("sms_juicysms", "units", 1.0, price("/sms/juicysms/reddit")?));
+    expected.push(("sms_juicysms", "units", SINGLE_EVENT_USAGE, price("/sms/juicysms/reddit")?));
     let mobile = PyDict::new(py);
     mobile.set_item("is_mobile", true)?;
-    let half_gib = 536_870_912_u64;
-    tracker.call_method("record_proxy_bytes", ("oxylabs", half_gib), Some(&mobile))?;
+    tracker.call_method("record_proxy_bytes", ("oxylabs", BYTES_PER_GIB), Some(&mobile))?;
     expected.push((
         "proxy_oxylabs_mobile",
         "bytes",
-        half_gib as f64,
-        price("/proxy_per_gb/oxylabs_mobile")? / 2.0,
+        BYTES_PER_GIB as f64,
+        price("/proxy_per_gb/oxylabs_mobile")?,
     ));
+    let both_blocks = (TOKENS_PER_PRICED_BLOCK + TOKENS_PER_PRICED_BLOCK) as f64;
     let tokens = PyDict::new(py);
-    tokens.set_item("input_tokens", 500)?;
-    tokens.set_item("output_tokens", 250)?;
+    tokens.set_item("input_tokens", TOKENS_PER_PRICED_BLOCK)?;
+    tokens.set_item("output_tokens", TOKENS_PER_PRICED_BLOCK)?;
     tokens.set_item("skill_id", "qualification-priced-usage")?;
     tracker.call_method("record_llm", ("gpt-4o",), Some(&tokens))?;
+    expected.push(("llm", "tokens", both_blocks, block_cost("gpt-4o")?));
+    tracker.call_method1("record_compute", ("aws_t3.medium", SECONDS_PER_HOUR))?;
     expected.push((
-        "llm_openai",
-        "tokens",
-        750.0,
-        price("/llm/gpt-4o/input_per_1k")? / 2.0 + price("/llm/gpt-4o/output_per_1k")? / 4.0,
-    ));
-    tracker.call_method1("record_compute", ("aws_t3.medium", 1800))?;
-    expected.push((
-        "compute_aws",
+        "compute",
         "seconds",
-        1800.0,
-        price("/compute_per_hour/aws_t3.medium")? / 2.0,
+        SECONDS_PER_HOUR as f64,
+        price("/compute_per_hour/aws_t3.medium")?,
     ));
     tracker.call_method1("record_email", ("resend",))?;
-    expected.push(("email_resend", "emails", 1.0, price("/email/resend")?));
+    expected.push(("email_resend", "emails", SINGLE_EVENT_USAGE, price("/email/resend")?));
+    // A count past the integers a double holds exactly, so a lossy path shows.
+    let large_tokens = u64::MAX;
     let overridden = PyDict::new(py);
-    let large_tokens = (1_u64 << 60) + 1;
     overridden.set_item("input_tokens", large_tokens)?;
     overridden.set_item("override", python::COST_USD)?;
     overridden.set_item("skill_id", "qualification-explicit-charge")?;
     tracker.call_method("record_llm", ("gpt-4o-mini",), Some(&overridden))?;
-    expected.push(("llm_openai", "tokens", large_tokens as f64, python::COST_USD));
-    let mini_cost = price("/llm/gpt-4o-mini/input_per_1k")? / 2.0 + price("/llm/gpt-4o-mini/output_per_1k")? / 4.0;
+    expected.push(("llm", "tokens", large_tokens as f64, python::COST_USD));
     tracker.call_method("record_llm", ("GPT-4O-MINI",), Some(&tokens))?;
-    expected.push(("llm_openai", "tokens", 750.0, mini_cost));
-    tracker.call_method("record_llm", ("gpt-4o-mini-2024-07-18",), Some(&tokens))?;
-    expected.push(("llm_openai", "tokens", 750.0, mini_cost));
+    expected.push(("llm", "tokens", both_blocks, block_cost("gpt-4o-mini")?));
+    // A name that contains a listed key without being one is priced at the default.
+    tracker.call_method("record_llm", ("qualification-gpt-4o-mini-variant",), Some(&tokens))?;
+    expected.push(("llm", "tokens", both_blocks, block_cost("default")?));
     tracker.call_method("record_llm", ("qualification-unpriced-model",), Some(&tokens))?;
-    expected.push((
-        "llm_other",
-        "tokens",
-        750.0,
-        price("/llm/default/input_per_1k")? / 2.0 + price("/llm/default/output_per_1k")? / 4.0,
-    ));
+    expected.push(("llm", "tokens", both_blocks, block_cost("default")?));
     tracker.call_method1("record_captcha", ("capsolver", "qualification-unlisted-task"))?;
-    expected.push(("captcha_capsolver", "solves", 1.0, price("/captcha/capsolver/default")?));
+    expected.push(("captcha_capsolver", "solves", SINGLE_EVENT_USAGE, price("/captcha/capsolver/default")?));
 
     let unpriced = format!("qualification_{}", python::uuid(py)?);
     let captcha_service = format!("captcha_{unpriced}");
@@ -99,10 +113,10 @@ pub fn run(py: Python<'_>, run: &Run) -> Result<Value> {
             "unpriced usage entered the buffer"
         );
         refusals.push(json!({"operation": method, "error": error.to_string()}));
-        let free = PyDict::new(py);
-        free.set_item("override", 0)?;
-        tracker.call_method(method, (&unpriced, "qualification-resource"), Some(&free))?;
-        expected.push((service, unit, 1.0, 0.0));
+        let charge = PyDict::new(py);
+        charge.set_item("override", free)?;
+        tracker.call_method(method, (&unpriced, "qualification-resource"), Some(&charge))?;
+        expected.push((service, unit, SINGLE_EVENT_USAGE, free));
     }
     tracker.call_method0("flush")?;
     let sink = tracker.call_method0("get_sink")?;
@@ -114,12 +128,19 @@ pub fn run(py: Python<'_>, run: &Run) -> Result<Value> {
             && row["usage_amount"].as_f64() == Some(*amount) && row["cost_usd"].as_f64() == Some(*cost),
             "priced usage does not match canonical unit arithmetic: {row}; expected {service} {amount} {unit}, USD {cost}");
     }
+    let skill = |name: &str| {
+        records
+            .iter()
+            .find(|row| row["metadata"]["skill_id"] == name)
+            .with_context(|| format!("no record carries skill {name}"))
+    };
+    let priced = skill("qualification-priced-usage")?;
+    let charged = skill("qualification-explicit-charge")?;
     ensure!(
-        records[3]["metadata"]["input_tokens"] == 500
-            && records[3]["metadata"]["output_tokens"] == 250
-            && records[3]["metadata"]["skill_id"] == "qualification-priced-usage"
-            && records[6]["metadata"]["input_tokens"].as_u64() == Some(large_tokens)
-            && records[6]["metadata"]["output_tokens"] == 0,
+        priced["metadata"]["input_tokens"].as_u64() == Some(TOKENS_PER_PRICED_BLOCK)
+            && priced["metadata"]["output_tokens"].as_u64() == Some(TOKENS_PER_PRICED_BLOCK)
+            && charged["metadata"]["input_tokens"].as_u64() == Some(large_tokens)
+            && charged["metadata"]["output_tokens"].as_u64() == Some(OMITTED_TOKENS),
         "token accounting lost integer precision or omitted-default semantics"
     );
     Ok(json!({"accepted_records": rows, "pricing_refusals": refusals}))

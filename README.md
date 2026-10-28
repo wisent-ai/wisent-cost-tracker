@@ -202,9 +202,11 @@ Captcha and SMS helpers use the resource price, then that provider's declared
 default. Without either, Python raises `ValueError` and TypeScript raises
 `RangeError`, naming the provider and resource. No record enters the buffer.
 Supply the helper's explicit override, including `0` for a known free charge.
-LLM pricing uses an exact model key, otherwise the longest matching key, then
-the table's declared default. Thus `gpt-4o-mini` and its dated variants use the
-mini rate rather than the shorter `gpt-4o` key.
+LLM pricing uses the catalogue entry whose key is the model name (case aside),
+otherwise the table's declared default. A model the catalogue does not list,
+a dated variant of a listed model included, is priced at the default, never
+at a listed model whose key its name contains; declare the variant in
+`pricing/costs.json` or pass the billed amount as the override.
 
 ## Runtime and delivery behavior
 

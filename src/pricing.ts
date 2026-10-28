@@ -4,8 +4,8 @@
  * prices without re-declaring them in code.
  */
 
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export interface PricingTable {
   version: number;
@@ -19,21 +19,29 @@ export interface PricingTable {
   email: Record<string, number>;
 }
 
-// Unit conversions for the canonical pricing table.
+/** Bytes in a gibibyte, the unit proxy prices are declared per
+ *  (IEC 80000-13 binary prefixes, https://www.iso.org/standard/87648.html). */
 const BYTES_PER_GIB = 1024 * 1024 * 1024;
+/** Tokens in the block an LLM price is declared per: the catalogue's
+ *  `input_per_1k` and `output_per_1k` keys
+ *  (https://github.com/wisent-ai/wisent-cost-tracker/blob/main/pricing/costs.json). */
 const TOKENS_PER_PRICED_BLOCK = 1000;
+/** Seconds in an hour, the unit compute prices are declared per
+ *  (SI Brochure, https://www.bipm.org/en/publications/si-brochure). */
 const SECONDS_PER_HOUR = 3600;
 
 let cached: PricingTable | null = null;
 
 /** Resolve the canonical pricing JSON path. Build copies the file under
- *  `dist/pricing/costs.json`; in-source dev resolves up to `../../pricing/`. */
+ *  `dist/pricing/costs.json`; in-source dev resolves up to `../../pricing/`.
+ *  Neither present is refused naming both places looked in. */
 function resolvePricingPath(): string {
   // CJS build: __dirname is dist/. Source dev: __dirname is js/src/.
-  const here = __dirname;
-  const built = join(here, 'pricing', 'costs.json');
-  try { readFileSync(built); return built; } catch { /* fall through */ }
-  return join(here, '..', '..', 'pricing', 'costs.json');
+  const built = join(__dirname, 'pricing', 'costs.json');
+  if (existsSync(built)) return built;
+  const source = join(__dirname, '..', '..', 'pricing', 'costs.json');
+  if (existsSync(source)) return source;
+  throw new Error(`the pricing catalogue is in neither the build (${built}) nor the source tree (${source})`);
 }
 
 export function loadPricing(): PricingTable {
@@ -73,21 +81,13 @@ export function proxyCostForBytes(provider: string, bytes: number, isMobile = fa
   return (bytes / BYTES_PER_GIB) * perGb;
 }
 
-/** Use an exact model key, otherwise the longest matching key, then the
- *  declared default. Dated model variants keep their family's price. */
+/** Use the catalogue entry whose key is the model name (case aside), else the
+ *  declared default: a model the catalogue does not list is priced at the
+ *  default, never at a listed model whose key its name happens to contain. */
 export function llmCost(model: string, inputTokens: number, outputTokens: number): number {
-  const ml = model.toLowerCase();
-  let prices = PRICES.llm.default;
-  let matchLength = 0;
-  for (const [k, v] of Object.entries(PRICES.llm)) {
-    if (k === 'default') continue;
-    const key = k.toLowerCase();
-    if (key === ml) { prices = v; break; }
-    if (key.length > matchLength && ml.includes(key)) {
-      prices = v;
-      matchLength = key.length;
-    }
-  }
+  const name = model.toLowerCase();
+  const declared = Object.keys(PRICES.llm).find((key) => key !== 'default' && key.toLowerCase() === name);
+  const prices = PRICES.llm[declared === undefined ? 'default' : declared];
   return (inputTokens / TOKENS_PER_PRICED_BLOCK) * prices.input_per_1k + (outputTokens / TOKENS_PER_PRICED_BLOCK) * prices.output_per_1k;
 }
 
