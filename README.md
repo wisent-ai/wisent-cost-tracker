@@ -152,11 +152,8 @@ connection can hold up an explicit flush or process shutdown. What each
 TypeScript record helper records, the agent `record` attributes spend to and
 what the exit hooks do on a signal: [docs/record-helpers.md](docs/record-helpers.md).
 
-The native transport reports the operation, method, URL and cause for a failed
-request. A non-success HTTP response also includes its status and full response
-body. Invalid JSON reports the response status and body. Supabase reads follow
-server pagination rather than treating one server-sized page as the full result.
-An empty page before the reported total is an error, not a successful partial read.
+How the Supabase sink reports a failed request, follows pagination and refuses
+an answer whose row total it cannot read: [docs/supabase-sink.md](docs/supabase-sink.md).
 
 Configuration refusals include:
 
