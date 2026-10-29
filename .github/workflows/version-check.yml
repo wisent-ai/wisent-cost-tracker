@@ -378,6 +378,14 @@ jobs:
           fi
           echo "npm: baseline is on the best reachable tier ($have)"
 
+      # The gate reads the npm surface from dist/, the declarations the package
+      # ships. dist/ is built, never committed (.gitignore holds it), so a fresh
+      # checkout has none and the gate refused every run with "no
+      # dist/index.d.ts". `npm ci` installs the lockfile and runs the package's
+      # `prepare` script, which is its build.
+      - name: npm — build the shipped declarations
+        run: npm ci --no-audit --no-fund
+
       - name: npm — gate
         run: |
           set -euo pipefail
