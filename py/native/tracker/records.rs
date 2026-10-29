@@ -88,9 +88,15 @@ impl CostTracker {
         metadata.set_item("input_tokens", input)?;
         metadata.set_item("output_tokens", output)?;
         if let Some(skill) = skill_id.filter(|skill| !skill.is_empty()) { metadata.set_item("skill_id", skill)?; }
+        let pricing = py.import("wisent_cost_tracker.pricing")?;
         let cost = match r#override {
             Some(cost) => cost,
-            None => py.import("wisent_cost_tracker.pricing")?.call_method1("llm_cost", (model, input, output))?,
+            None => {
+                // The catalogue key the price came from, `default` for a model
+                // the catalogue does not list, so a default price reads as one.
+                metadata.set_item("priced_as", pricing.call_method1("llm_price_key", (model,))?)?;
+                pricing.call_method1("llm_cost", (model, input, output))?
+            }
         };
         let amount = py.import("operator")?.call_method1("add", (input, output))?;
         // Filed under `llm` with the model as the resource: the provider is

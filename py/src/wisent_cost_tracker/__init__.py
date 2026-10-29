@@ -11,6 +11,7 @@ from .pricing import (
     sms_price,
     proxy_cost_for_bytes,
     llm_cost,
+    llm_price_key,
     compute_cost,
     load_pricing,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "sms_price",
     "proxy_cost_for_bytes",
     "llm_cost",
+    "llm_price_key",
     "compute_cost",
     "load_pricing",
     "MemorySink",

@@ -55,6 +55,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sms_price, module)?)?;
     module.add_function(wrap_pyfunction!(proxy_cost_for_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(llm_cost, module)?)?;
+    module.add_function(wrap_pyfunction!(llm_price_key, module)?)?;
     module.add_function(wrap_pyfunction!(compute_cost, module)?)?;
     Ok(())
 }
@@ -140,20 +141,26 @@ fn proxy_cost_for_bytes(
     Ok(fraction(py, num_bytes, BYTES_PER_GIB)? * price.extract::<f64>()?)
 }
 
-/// The catalogue entry pricing `model`: the entry whose key is the model name
-/// (case aside), otherwise the declared table default. A model the catalogue
-/// does not list is priced at the default, never at a listed model whose key
-/// its name happens to contain.
-fn llm_entry<'py>(py: Python<'py>, model: &str) -> PyResult<Bound<'py, PyAny>> {
+/// The catalogue key pricing `model`: the key that is the model name (case
+/// aside), otherwise `default`. A model the catalogue does not list is priced
+/// at the default, never at a listed model whose key its name happens to
+/// contain; the record names the key so a default price reads as one.
+#[pyfunction]
+fn llm_price_key(py: Python<'_>, model: &str) -> PyResult<String> {
     let model = model.to_lowercase();
-    let catalog = table(py, "llm")?;
-    for (key, value) in catalog.iter() {
+    for key in table(py, "llm")?.keys() {
         let key = key.extract::<String>()?;
         if key != "default" && key.to_lowercase() == model {
-            return Ok(value);
+            return Ok(key);
         }
     }
-    catalog.get_item("default")?.ok_or_else(|| {
+    Ok("default".to_owned())
+}
+
+/// The catalogue entry [`llm_price_key`] names.
+fn llm_entry<'py>(py: Python<'py>, model: &str) -> PyResult<Bound<'py, PyAny>> {
+    let key = llm_price_key(py, model)?;
+    table(py, "llm")?.get_item(&key)?.ok_or_else(|| {
         PyValueError::new_err(format!(
             "No declared LLM price for model={model:?} and no table default"
         ))

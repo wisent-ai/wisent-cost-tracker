@@ -1,6 +1,6 @@
 import type { CostRecord, CostSink, RecordInput, UsageType } from '../types.js';
 import { MemorySink, FileSink, SupabaseSink, type SupabaseSinkOptions } from './sinks.js';
-import { captchaPrice, smsPrice, proxyCostForBytes, llmCost, computeCost, PRICES } from '../pricing.js';
+import { captchaPrice, smsPrice, proxyCostForBytes, llmCost, llmPriceKey, computeCost, PRICES } from '../pricing.js';
 
 // Symbol.for identifies listeners across independently loaded package copies.
 const TRACKER_SIGNAL = Symbol.for('@wisent/cost-tracker:signal-listener');
@@ -162,7 +162,9 @@ export class CostTracker {
       usage_type: 'tokens',
       usage_amount: inputTokens + outputTokens,
       cost_usd: override === undefined ? llmCost(model, inputTokens, outputTokens) : override,
-      metadata: { input_tokens: inputTokens, output_tokens: outputTokens },
+      metadata: override === undefined
+        ? { input_tokens: inputTokens, output_tokens: outputTokens, priced_as: llmPriceKey(model) }
+        : { input_tokens: inputTokens, output_tokens: outputTokens },
     });
   }
 

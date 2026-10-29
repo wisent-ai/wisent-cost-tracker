@@ -11,6 +11,11 @@ the resource: the price catalogue declares no provider for a model, so none is
 guessed from words in its name. `recordCompute` (Python `record_compute`) files
 every instance under the service `compute` with the instance type as the
 resource, for the same reason: an undeclared instance type names no provider.
+A model call is priced at the catalogue entry whose key is the model name
+(case aside) or at the catalogue's `default` entry, never at a listed model
+whose key its name contains; the record's `metadata.priced_as` names that key
+(`llmPriceKey`, Python `llm_price_key`), so a default price reads as one. A
+call recorded with an override carries no `priced_as`.
 
 ## The agent a record is attributed to
 

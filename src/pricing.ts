@@ -81,13 +81,18 @@ export function proxyCostForBytes(provider: string, bytes: number, isMobile = fa
   return (bytes / BYTES_PER_GIB) * perGb;
 }
 
-/** Use the catalogue entry whose key is the model name (case aside), else the
- *  declared default: a model the catalogue does not list is priced at the
- *  default, never at a listed model whose key its name happens to contain. */
-export function llmCost(model: string, inputTokens: number, outputTokens: number): number {
+/** The catalogue key pricing `model`: the key that is the model name (case
+ *  aside), else `default`: a model the catalogue does not list is priced at
+ *  the default, never at a listed model whose key its name happens to
+ *  contain. Records name the key so a default price reads as one. */
+export function llmPriceKey(model: string): string {
   const name = model.toLowerCase();
   const declared = Object.keys(PRICES.llm).find((key) => key !== 'default' && key.toLowerCase() === name);
-  const prices = PRICES.llm[declared === undefined ? 'default' : declared];
+  return declared === undefined ? 'default' : declared;
+}
+
+export function llmCost(model: string, inputTokens: number, outputTokens: number): number {
+  const prices = PRICES.llm[llmPriceKey(model)];
   return (inputTokens / TOKENS_PER_PRICED_BLOCK) * prices.input_per_1k + (outputTokens / TOKENS_PER_PRICED_BLOCK) * prices.output_per_1k;
 }
 
